@@ -34,3 +34,4 @@ target
 /*/SPEC.md
 .DS_Store
 hardening-spec.md
+airlift-out-codex-to-claude/
