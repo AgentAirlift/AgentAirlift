@@ -10,8 +10,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Run a demo migration with local files
-    Demo {
+    /// Run the migration pipeline (alias: demo)
+    #[command(visible_alias = "demo")]
+    Migrate {
         /// Path to session JSONL file
         #[arg(long)]
         session: String,
@@ -67,5 +68,40 @@ pub enum Commands {
         /// Box parent folder ID (overrides BOX_PARENT_FOLDER_ID env var)
         #[arg(long)]
         box_parent_folder_id: Option<String>,
+    },
+
+    /// Refresh the provider-health signal only (no migration, no Box)
+    Health {
+        /// Provider being evaluated (e.g., claude-code)
+        #[arg(long)]
+        source: String,
+
+        /// Output directory; persists <out>/provider-health.json
+        #[arg(long, default_value = "./airlift-out")]
+        out: String,
+
+        /// Provider health source type
+        #[arg(long, default_value = "apify")]
+        provider_health: String,
+
+        /// Path to provider health file (if using file source)
+        #[arg(long)]
+        provider_health_file: Option<String>,
+
+        /// Apify actor ID (overrides APIFY_ACTOR_ID env var)
+        #[arg(long)]
+        apify_actor_id: Option<String>,
+
+        /// Apify task ID (overrides APIFY_TASK_ID env var)
+        #[arg(long)]
+        apify_task_id: Option<String>,
+
+        /// URL to pass as input to the Apify actor/task
+        #[arg(long)]
+        apify_input_url: Option<String>,
+
+        /// Fallback cache file if Apify live call fails
+        #[arg(long)]
+        apify_cache_file: Option<String>,
     },
 }

@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     
     match cli.command {
-        cli::Commands::Demo {
+        cli::Commands::Migrate {
             session,
             project,
             out,
@@ -31,16 +31,29 @@ fn main() -> anyhow::Result<()> {
             box_upload,
             box_dry_run,
             box_parent_folder_id,
-        } => run_demo(
+        } => run_migration(
             session, project, out, source, targets,
             provider_health, provider_health_file,
             apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
             box_upload, box_dry_run, box_parent_folder_id,
         ),
+        cli::Commands::Health {
+            source,
+            out,
+            provider_health,
+            provider_health_file,
+            apify_actor_id,
+            apify_task_id,
+            apify_input_url,
+            apify_cache_file,
+        } => run_health(
+            source, out, provider_health, provider_health_file,
+            apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
+        ),
     }
 }
 
-fn run_demo(
+fn run_migration(
     session: String,
     project: String,
     out: String,
@@ -214,5 +227,53 @@ fn run_demo(
         println!("\nBox upload disabled. Local artifacts only.");
     }
 
+    Ok(())
+}
+
+fn run_health(
+    source: String,
+    out: String,
+    provider_health: String,
+    provider_health_file: Option<String>,
+    apify_actor_id: Option<String>,
+    apify_task_id: Option<String>,
+    apify_input_url: Option<String>,
+    apify_cache_file: Option<String>,
+) -> anyhow::Result<()> {
+    let (health, warnings) = if provider_health == "apify" {
+        let token = std::env::var("APIFY_API_TOKEN").unwrap_or_default();
+        let actor_id_env = std::env::var("APIFY_ACTOR_ID").ok();
+        let task_id_env = std::env::var("APIFY_TASK_ID").ok();
+        let cfg = provider_health::ApifyConfig {
+            token: &token,
+            actor_id: apify_actor_id.as_deref().or(actor_id_env.as_deref()),
+            task_id: apify_task_id.as_deref().or(task_id_env.as_deref()),
+            input_url: apify_input_url.as_deref()
+                .or_else(|| provider_health::default_tracker_url(&source)),
+            provider: &source,
+        };
+        let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
+        let (health, _raw, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
+        (health, warnings)
+    } else {
+        let file_path = provider_health_file.as_deref().map(std::path::Path::new);
+        (provider_health::load_provider_health(&provider_health, file_path)?, vec![])
+    };
+
+    let out_dir = std::path::PathBuf::from(&out);
+    fs::create_dir_all(&out_dir)?;
+    fs_util::write_json_pretty(&out_dir.join("provider-health.json"), &health)?;
+
+    for w in &warnings {
+        eprintln!("⚠️  {}", w);
+    }
+    println!("{}", serde_json::to_string_pretty(&health)?);
+    println!(
+        "AIRLIFT_HEALTH status={} provider={} confidence={} source={}",
+        health["status"].as_str().unwrap_or("unknown"),
+        health["provider"].as_str().unwrap_or(&source),
+        health["confidence"].as_f64().unwrap_or(0.0),
+        health["source"].as_str().unwrap_or("unknown"),
+    );
     Ok(())
 }
