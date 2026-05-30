@@ -99,14 +99,17 @@ fn repo_file_list(snapshot: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn health_summary(health: Option<&Value>) -> String {
+fn health_summary(health: Option<&Value>, evaluated_provider: &str) -> String {
     match health {
         None => "No provider health data available. Assume all providers operational.".into(),
         Some(h) => {
-            let provider = h.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let status   = h.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let message  = h.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            format!("`{}` is **{}**. {}", provider, status, message)
+            let signal_source = h.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let status        = h.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let message       = h.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            format!(
+                "Provider health signal from `{}`: `{}` is **{}**. {}",
+                signal_source, evaluated_provider, status, message
+            )
         }
     }
 }
@@ -176,6 +179,29 @@ fn work_completed(turns: &[CanonicalTurn]) -> Vec<String> {
         .collect()
 }
 
+/// If the last turn is an assistant reply, the last user request was likely addressed.
+/// Suggest validation rather than blindly repeating it.
+fn next_task(turns: &[CanonicalTurn]) -> String {
+    let last_user = turns.iter().filter(|t| t.role == "user").last();
+    let last_turn = turns.last();
+
+    match (last_user, last_turn) {
+        (Some(u), Some(last)) if last.role == "assistant" => {
+            // Last user request was followed by an assistant reply — likely completed.
+            let preview = &u.content[..u.content.len().min(80)];
+            format!(
+                "Validate the completed task (\"{}\"), then continue with the next user request.",
+                preview
+            )
+        }
+        (Some(u), _) => {
+            // Last turn is a user message — still open.
+            u.content[..u.content.len().min(200)].to_string()
+        }
+        (None, _) => "No user turns found. Review session and determine next action.".into(),
+    }
+}
+
 // ── public doc generators ─────────────────────────────────────────────────────
 
 pub fn create_handoff_docs(
@@ -187,7 +213,7 @@ pub fn create_handoff_docs(
 
     let objective   = first_user_content(turns);
     let files       = repo_file_list(ctx.repo_snapshot);
-    let health      = health_summary(ctx.provider_health);
+    let health      = health_summary(ctx.provider_health, ctx.source);
     let decisions   = extract_decisions(turns);
     let commands    = extract_commands(turns);
     let errors      = extract_errors(turns);
@@ -287,6 +313,8 @@ Read AGENTS.md for full context, then continue where the session left off.
         files.iter().take(10).cloned().collect::<Vec<_>>().join("\n")
     };
 
+    let next_task_str = next_task(turns);
+
     let agents = format!(
 r#"# AGENTS.md — Agent Handoff Instructions
 
@@ -315,8 +343,7 @@ The session has been migrated to: {targets}.
 - Asking for credentials — none are required for local pipeline work.
 
 ## Next Recommended Task
-Continue from the last user message:
-> {last_user}
+> {next_task}
 
 ## Validation Commands
 ```bash
@@ -335,8 +362,8 @@ cargo test
         objective  = objective,
         files_inspect = files_inspect,
         completed_str = completed_str,
-        last_user  = &last_user[..last_user.len().min(200)],
-        health     = health_summary(ctx.provider_health),
+        next_task  = next_task_str,
+        health     = health_summary(ctx.provider_health, ctx.source),
     );
 
     std::fs::write(output_dir.join("AGENTS.md"), agents)?;
@@ -448,5 +475,44 @@ mod tests {
         let result = export_for_target("invalid", &canonical_turns, output_dir1);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unsupported target"));
+    }
+
+    #[test]
+    fn test_health_summary_distinguishes_signal_source_from_evaluated_provider() {
+        let health = json!({
+            "provider": "apify",
+            "status": "degraded",
+            "message": "High latency detected"
+        });
+        let summary = health_summary(Some(&health), "claude-code");
+        // Signal source (apify) and evaluated provider (claude-code) must both appear
+        assert!(summary.contains("apify"), "should mention signal source");
+        assert!(summary.contains("claude-code"), "should mention evaluated provider");
+        assert!(summary.contains("degraded"));
+        // Must NOT say "apify is degraded" — that conflates source with evaluated provider
+        assert!(!summary.contains("`apify` is"), "must not say apify is degraded");
+    }
+
+    #[test]
+    fn test_next_task_suggests_validation_when_last_turn_is_assistant() {
+        // Session ends with assistant reply → last user request was addressed
+        let turns = vec![
+            CanonicalTurn { id: "t1".into(), role: "user".into(),
+                content: "Add a version flag".into(), timestamp: "".into(), metadata: json!({}) },
+            CanonicalTurn { id: "t2".into(), role: "assistant".into(),
+                content: "Added version flag.".into(), timestamp: "".into(), metadata: json!({}) },
+        ];
+        let task = next_task(&turns);
+        assert!(task.contains("Validate"), "should suggest validation, got: {}", task);
+        assert!(task.contains("Add a version flag"), "should reference the completed request");
+
+        // Session ends with user message → still open, return it directly
+        let turns_open = vec![
+            CanonicalTurn { id: "t1".into(), role: "user".into(),
+                content: "Add a version flag".into(), timestamp: "".into(), metadata: json!({}) },
+        ];
+        let task_open = next_task(&turns_open);
+        assert!(task_open.contains("Add a version flag"));
+        assert!(!task_open.contains("Validate"), "open request should not say Validate");
     }
 }
