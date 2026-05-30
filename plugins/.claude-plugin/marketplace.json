@@ -1,0 +1,16 @@
+{
+  "name": "agent-airlift-local",
+  "owner": { "name": "Agent Airlift" },
+  "metadata": {
+    "description": "Local marketplace for the Agent Airlift Claude Code plugin.",
+    "pluginRoot": "."
+  },
+  "plugins": [
+    {
+      "name": "agent-airlift",
+      "source": "./claude",
+      "description": "Check Claude Code provider health and airlift the current session to Codex when degraded.",
+      "version": "0.1.0"
+    }
+  ]
+}

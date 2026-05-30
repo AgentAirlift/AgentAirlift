@@ -1,3 +1,7 @@
+---
+description: Check Codex provider health; recommend airlift to Claude Code if degraded
+---
+
 Run the Agent Airlift health check by executing this command in the shell:
 
     bash plugins/codex/scripts/check.sh
