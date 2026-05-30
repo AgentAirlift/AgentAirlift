@@ -1,0 +1,8 @@
+{
+  "provider": "apify",
+  "status": "degraded",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "message": "High latency on actor execution endpoints",
+  "affected_actors": ["web-scraper", "content-extractor"],
+  "estimated_recovery": "2024-01-01T06:00:00Z"
+}

@@ -30,3 +30,4 @@ target
 /target/
 /.env.example
 */.DS_Store
+/airlift-out
