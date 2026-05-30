@@ -1,54 +1,106 @@
 use serde_json::{json, Value};
 use crate::session_import::SessionTurn;
 
-#[derive(Debug, serde::Serialize)]
+/// Canonical, deterministic representation of a single turn.
+///
+/// NOTE: This captures only observable conversation data (role, text, tool
+/// calls/results, timestamps, provenance). It deliberately does NOT attempt to
+/// reconstruct any model hidden state or chain-of-thought — that information is
+/// not present in exported sessions and is not invented here.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct CanonicalTurn {
     pub id: String,
     pub role: String,
     pub content: String,
     pub timestamp: String,
+    /// Provenance: which source format/provider this turn came from.
+    pub source: String,
+    pub content_blocks: Value,
+    pub tool_calls: Value,
+    pub tool_results: Value,
     pub metadata: Value,
 }
 
-pub fn normalize_turns(turns: Vec<SessionTurn>) -> (Vec<CanonicalTurn>, Vec<String>, Value) {
+/// Top-level keys that are mapped into canonical fields (not copied to metadata).
+const MAPPED_TOP_KEYS: &[&str] =
+    &["id", "uuid", "role", "content", "timestamp", "type", "message", "payload"];
+
+pub fn normalize_turns(
+    turns: Vec<SessionTurn>,
+    source: &str,
+) -> (Vec<CanonicalTurn>, Vec<String>, Value) {
     let mut canonical_turns = Vec::new();
-    let warnings = Vec::new();
-    let dropped_fields = json!({});
-    
+    let warnings: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+
     for (i, turn) in turns.into_iter().enumerate() {
-        let id = turn.id.unwrap_or_else(|| format!("turn-{}", i + 1));
-        let role = turn.role.unwrap_or_else(|| "unknown".to_string());
-        let content = turn.content.unwrap_or_else(|| "".to_string());
-        
-        // Extract timestamp from raw JSON or use current time
-        let timestamp = turn.raw.get("timestamp")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        let id = turn.id.clone().unwrap_or_else(|| format!("turn-{}", i + 1));
+        let role = turn.role.clone().unwrap_or_else(|| "unknown".to_string());
+        let content = turn.content.clone().unwrap_or_default();
+        let timestamp = turn
+            .timestamp
+            .clone()
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-        
-        // Collect metadata from remaining fields
+
+        // metadata = unknown top-level keys (preserved verbatim)
         let mut metadata = json!({});
-        if let Value::Object(obj) = turn.raw {
+        if let Value::Object(obj) = &turn.raw {
             for (key, value) in obj {
-                match key.as_str() {
-                    "id" | "role" | "content" | "timestamp" => continue,
-                    _ => {
-                        metadata[key] = value;
-                    }
+                if !MAPPED_TOP_KEYS.contains(&key.as_str()) {
+                    metadata[key] = value.clone();
                 }
             }
+            // record nested sub-keys we summarized rather than elevated
+            collect_unmapped(obj.get("message"), "message", &mut dropped);
+            collect_unmapped(obj.get("payload"), "payload", &mut dropped);
         }
-        
+
+        // deterministic content blocks
+        let mut blocks: Vec<Value> = Vec::new();
+        if !content.is_empty() {
+            blocks.push(json!({"type": "text", "text": content}));
+        }
+        for tc in &turn.tool_calls {
+            blocks.push(json!({"type": "tool_use", "tool": tc}));
+        }
+        for tr in &turn.tool_results {
+            blocks.push(json!({"type": "tool_result", "result": tr}));
+        }
+
         canonical_turns.push(CanonicalTurn {
             id,
             role,
             content,
             timestamp,
+            source: source.to_string(),
+            content_blocks: Value::Array(blocks),
+            tool_calls: Value::Array(turn.tool_calls),
+            tool_results: Value::Array(turn.tool_results),
             metadata,
         });
     }
-    
+
+    dropped.sort();
+    dropped.dedup();
+    let dropped_fields = json!({
+        "unmapped_nested_fields": dropped,
+        "note": "These source sub-fields were summarized into canonical fields, not elevated verbatim. The full original is preserved in raw/source-session.jsonl.",
+    });
+
     (canonical_turns, warnings, dropped_fields)
+}
+
+/// Records keys inside a nested `message`/`payload` object that aren't mapped
+/// to a canonical field, as `prefix.key`, so audits show what was summarized.
+fn collect_unmapped(nested: Option<&Value>, prefix: &str, out: &mut Vec<String>) {
+    if let Some(Value::Object(obj)) = nested {
+        for key in obj.keys() {
+            match key.as_str() {
+                "role" | "content" | "type" | "message" => {}
+                other => out.push(format!("{}.{}", prefix, other)),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -58,8 +110,6 @@ mod tests {
 
     #[test]
     fn test_canonical_session_generation() {
-        // Test 4: canonical session generation preserves turn count
-        // Create test session turns
         let turns = vec![
             SessionTurn {
                 raw: json!({
@@ -72,6 +122,8 @@ mod tests {
                 id: Some("test-1".to_string()),
                 role: Some("user".to_string()),
                 content: Some("Test content 1".to_string()),
+                timestamp: Some("2024-01-01T10:00:00Z".to_string()),
+                ..Default::default()
             },
             SessionTurn {
                 raw: json!({
@@ -83,55 +135,69 @@ mod tests {
                 id: Some("test-2".to_string()),
                 role: Some("assistant".to_string()),
                 content: Some("Test response 1".to_string()),
+                timestamp: Some("2024-01-01T10:00:05Z".to_string()),
+                ..Default::default()
             },
         ];
-        
-        let (canonical_turns, warnings, dropped_fields) = normalize_turns(turns);
-        
-        assert_eq!(canonical_turns.len(), 2, "Should preserve all 2 turns");
-        assert!(warnings.is_empty(), "Should have no warnings for valid turns");
-        assert!(dropped_fields.is_object(), "Dropped fields should be a JSON object");
-        
-        // Verify canonical structure
-        let first_canonical = &canonical_turns[0];
-        assert_eq!(first_canonical.id, "test-1");
-        assert_eq!(first_canonical.role, "user");
-        assert_eq!(first_canonical.content, "Test content 1");
-        assert_eq!(first_canonical.timestamp, "2024-01-01T10:00:00Z");
-        
-        // Verify metadata preservation
-        assert_eq!(first_canonical.metadata["extra_field"], "extra_value");
-        
-        // Verify second turn
-        let second_canonical = &canonical_turns[1];
-        assert_eq!(second_canonical.id, "test-2");
-        assert_eq!(second_canonical.role, "assistant");
-        assert_eq!(second_canonical.content, "Test response 1");
+
+        let (canonical_turns, warnings, dropped_fields) = normalize_turns(turns, "claude-code");
+
+        assert_eq!(canonical_turns.len(), 2);
+        assert!(warnings.is_empty());
+        assert!(dropped_fields.is_object());
+
+        let first = &canonical_turns[0];
+        assert_eq!(first.id, "test-1");
+        assert_eq!(first.role, "user");
+        assert_eq!(first.content, "Test content 1");
+        assert_eq!(first.timestamp, "2024-01-01T10:00:00Z");
+        assert_eq!(first.source, "claude-code"); // provenance stamped
+        assert_eq!(first.metadata["extra_field"], "extra_value"); // unknown field preserved
+        assert_eq!(canonical_turns[1].id, "test-2");
     }
 
     #[test]
     fn test_canonical_with_missing_fields() {
-        // Test canonical generation with missing fields
-        let turns = vec![
-            SessionTurn {
-                raw: json!({
-                    "content": "Test without id or role"
-                }),
-                id: None,
-                role: None,
-                content: Some("Test without id or role".to_string()),
-            },
-        ];
-        
-        let (canonical_turns, warnings, _) = normalize_turns(turns);
-        
+        let turns = vec![SessionTurn {
+            raw: json!({ "content": "Test without id or role" }),
+            content: Some("Test without id or role".to_string()),
+            ..Default::default()
+        }];
+
+        let (canonical_turns, warnings, _) = normalize_turns(turns, "flat");
         assert_eq!(canonical_turns.len(), 1);
         assert!(warnings.is_empty());
-        
-        let canonical = &canonical_turns[0];
-        assert_eq!(canonical.id, "turn-1"); // Generated ID
-        assert_eq!(canonical.role, "unknown"); // Default role
-        assert_eq!(canonical.content, "Test without id or role");
-        assert!(!canonical.timestamp.is_empty()); // Should have generated timestamp
+        let c = &canonical_turns[0];
+        assert_eq!(c.id, "turn-1"); // stable generated ID
+        assert_eq!(c.role, "unknown"); // default role
+        assert_eq!(c.content, "Test without id or role");
+        assert!(!c.timestamp.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_preserves_tool_calls_and_blocks() {
+        let turns = vec![SessionTurn {
+            raw: json!({"type": "assistant", "message": {"role": "assistant", "model": "claude-sonnet-4"}}),
+            id: Some("a-1".to_string()),
+            role: Some("assistant".to_string()),
+            content: Some("Reading the file.".to_string()),
+            timestamp: Some("2026-05-29T18:00:12Z".to_string()),
+            tool_calls: vec![json!({"id": "toolu_01", "name": "Read", "input": {"file_path": "src/main.rs"}})],
+            tool_results: vec![],
+            ..Default::default()
+        }];
+
+        let (canonical, _, dropped) = normalize_turns(turns, "claude-code");
+        let c = &canonical[0];
+        // tool calls preserved as first-class field
+        assert_eq!(c.tool_calls.as_array().unwrap().len(), 1);
+        assert_eq!(c.tool_calls[0]["name"], "Read");
+        // content_blocks include a text block + tool_use block
+        let blocks = c.content_blocks.as_array().unwrap();
+        assert!(blocks.iter().any(|b| b["type"] == "text"));
+        assert!(blocks.iter().any(|b| b["type"] == "tool_use"));
+        // message.model was summarized → recorded in dropped/unmapped
+        let unmapped = dropped["unmapped_nested_fields"].as_array().unwrap();
+        assert!(unmapped.iter().any(|f| f == "message.model"));
     }
 }

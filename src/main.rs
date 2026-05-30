@@ -71,10 +71,11 @@ fn run_demo(
     
     // 1. Import session
     println!("📥 Importing session...");
-    let (turns, import_warnings) = session_import::import_session(&config.session_path)?;
-    println!("   Parsed {} turns", turns.len());
-    if !import_warnings.is_empty() {
-        println!("   ⚠️  {} warnings during import", import_warnings.len());
+    let (turns, mut diagnostics) = session_import::import_session(&config.session_path)?;
+    println!("   Parsed {} turns ({} format, confidence {:.2})",
+        diagnostics.turns_imported, diagnostics.detected_format, diagnostics.format_confidence);
+    if !diagnostics.warnings.is_empty() {
+        println!("   ⚠️  {} warnings during import", diagnostics.warnings.len());
     }
     
     // Save raw session
@@ -125,7 +126,7 @@ fn run_demo(
     
     // 4. Normalize session
     println!("🔄 Normalizing session...");
-    let (canonical_turns, _, dropped_fields) = canonical::normalize_turns(turns);
+    let (canonical_turns, _, dropped_fields) = canonical::normalize_turns(turns, &config.source_provider);
     fs_util::write_json_pretty(
         &config.output_dir.join("normalized/canonical-session.json"),
         &serde_json::to_value(&canonical_turns)?,
@@ -165,12 +166,12 @@ fn run_demo(
     
     // 8. Create audit reports
     println!("📊 Creating audit reports...");
-    let mut all_warnings = import_warnings.clone();
-    all_warnings.extend(apify_warnings);
+    diagnostics.warnings.extend(apify_warnings);
     audit::create_audit_report(
         &canonical_turns,
-        &all_warnings,
+        &diagnostics,
         &dropped_fields,
+        &config.source_provider,
         &config.output_dir.join("audit"),
     )?;
     
@@ -178,7 +179,7 @@ fn run_demo(
     println!("\n✅ Demo completed successfully!");
     println!("📊 Summary:");
     println!("   - Turns processed: {}", canonical_turns.len());
-    println!("   - Import warnings: {}", import_warnings.len());
+    println!("   - Import warnings: {}", diagnostics.warnings.len());
     println!("   - Targets exported: {}", config.target_providers.join(", "));
     println!("   - Output location: {}", config.output_dir.display());
 
