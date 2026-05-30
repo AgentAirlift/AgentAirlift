@@ -39,5 +39,17 @@ pub enum Commands {
         /// Path to provider health file (if using file source)
         #[arg(long)]
         provider_health_file: Option<String>,
+
+        /// Upload output to Box
+        #[arg(long, default_value_t = false)]
+        box_upload: bool,
+
+        /// Dry-run Box upload (print what would be uploaded, no API calls)
+        #[arg(long, default_value_t = false)]
+        box_dry_run: bool,
+
+        /// Box parent folder ID (overrides BOX_PARENT_FOLDER_ID env var)
+        #[arg(long)]
+        box_parent_folder_id: Option<String>,
     },
 }
