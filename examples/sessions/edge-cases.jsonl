@@ -1,0 +1,6 @@
+{"id":"e-1","role":"user","content":"Start the migration please.","timestamp":"2026-05-29T20:00:00Z","custom_meta":{"client":"cli","experiment_flag":true},"unmapped_top":"keep-me"}
+this line is not valid json at all
+{"id":"e-2","role":"assistant","content":"","timestamp":"2026-05-29T20:00:05Z","note":"empty content but valid row"}
+{"type":"telemetry","uuid":"t-1","payload":{"event":"heartbeat"},"timestamp":"2026-05-29T20:00:06Z"}
+{"id":"e-3","role":"assistant","content":"Working on it.","timestamp":"2026-05-29T20:00:10Z"}
+{"id":"e-4","role":"user","content":"Use the new API key sk-FAKE-not-a-real-secret-1234 in the config","timestamp":"2026-05-29T20:00
