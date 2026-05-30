@@ -93,8 +93,7 @@ fn run_demo(
     println!("🏥 Loading provider health...");
     let (provider_health_data, apify_warnings) = if provider_health == "apify" {
         // Only read token when apify mode is explicitly requested
-        let token = std::env::var("APIFY_API_TOKEN")
-            .map_err(|_| anyhow::anyhow!("APIFY_API_TOKEN env var is not set"))?;
+        let token = std::env::var("APIFY_API_TOKEN").unwrap_or_default();
         let actor_id_env = std::env::var("APIFY_ACTOR_ID").ok();
         let task_id_env = std::env::var("APIFY_TASK_ID").ok();
         let cfg = provider_health::ApifyConfig {

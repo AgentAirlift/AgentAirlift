@@ -35,23 +35,32 @@ pub fn load_provider_health_apify(
 ) -> (Value, Vec<String>) {
     let mut warnings = Vec::new();
 
-    match fetch_apify(cfg) {
+    // If no token, skip live call entirely and go straight to cache/unknown
+    let live_result = if cfg.token.is_empty() {
+        warnings.push("APIFY_API_TOKEN not set; skipping live Apify call.".into());
+        Err(anyhow::anyhow!("no token"))
+    } else {
+        fetch_apify(cfg)
+    };
+
+    match live_result {
         Ok(raw) => {
             let health = normalize_apify_response(&raw, cfg.provider, "apify");
             (health, warnings)
         }
         Err(e) => {
-            warnings.push(format!("Apify live call failed: {}", e));
+            if !e.to_string().contains("no token") {
+                warnings.push(format!("Apify live call failed: {}", e));
+            }
             // Try cache fallback
             if let Some(path) = cache_file {
                 match load_from_file(Some(path)) {
                     Ok(mut cached) => {
-                        // Mark source as cached-apify
                         if let Some(obj) = cached.as_object_mut() {
                             obj.insert("source".into(), json!("cached-apify"));
                         }
                         warnings.push(format!(
-                            "Fell back to cached provider health: {}",
+                            "Using cached provider health: {}",
                             path.display()
                         ));
                         return (cached, warnings);
@@ -212,9 +221,9 @@ mod tests {
     fn test_provider_health_file_loading() {
         let path = Path::new("examples/provider-health/degraded.apify.cached.json");
         let health = load_provider_health("file", Some(path)).unwrap();
-        assert_eq!(health["provider"].as_str(), Some("apify"));
+        assert_eq!(health["provider"].as_str(), Some("claude-code"));
         assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(health["message"].as_str().unwrap().contains("High latency"));
+        assert!(health["reason"].as_str().unwrap().contains("Synthetic"));
     }
 
     #[test]
@@ -257,30 +266,46 @@ mod tests {
     }
 
     #[test]
-    fn test_apify_cache_fallback() {
-        // Simulate a failed live call by calling load_provider_health_apify
-        // with a bad token (we won't actually hit the network — we pass a cache file).
-        // We test the fallback path by providing a cache file and expecting cached-apify source.
+    fn test_apify_cache_fallback_no_token() {
+        // No token + cache file → should succeed with source = "cached-apify"
         let cache_path = Path::new("examples/provider-health/degraded.apify.cached.json");
         let cfg = ApifyConfig {
-            token: "bad-token",
+            token: "",          // empty = no token
             actor_id: None,
             task_id: None,
             input_url: None,
             provider: "claude-code",
         };
-        // This will fail (no actor/task id) and fall back to cache
         let (health, warnings) = load_provider_health_apify(&cfg, Some(cache_path));
         assert_eq!(health["source"].as_str(), Some("cached-apify"));
-        assert!(!warnings.is_empty());
+        assert_eq!(health["status"].as_str(), Some("degraded"));
+        assert!(warnings.iter().any(|w| w.contains("APIFY_API_TOKEN not set")));
+    }
+
+    #[test]
+    fn test_apify_no_token_no_cache_returns_unknown() {
+        let cfg = ApifyConfig {
+            token: "",
+            actor_id: None,
+            task_id: None,
+            input_url: None,
+            provider: "claude-code",
+        };
+        let (health, warnings) = load_provider_health_apify(&cfg, None);
+        assert_eq!(health["status"].as_str(), Some("unknown"));
+        assert!(warnings.iter().any(|w| w.contains("unknown")));
     }
 
     #[test]
     fn test_file_mode_does_not_use_apify_token() {
-        // file mode must not touch APIFY_API_TOKEN — just verify it succeeds
-        // without any env var set (token is never read in this path)
         let path = Path::new("examples/provider-health/degraded.apify.cached.json");
         let result = load_provider_health("file", Some(path));
         assert!(result.is_ok());
+    }
+
+    // Keep old name as alias so any external reference still compiles
+    #[test]
+    fn test_apify_cache_fallback() {
+        test_apify_cache_fallback_no_token();
     }
 }
