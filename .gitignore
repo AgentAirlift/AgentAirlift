@@ -31,3 +31,5 @@ target
 /.env.example
 */.DS_Store
 /airlift-out
+/*/SPEC.md
+.DS_Store
