@@ -217,8 +217,12 @@ fn poll_run_until_done(
 
 fn build_input(url: Option<&str>) -> Value {
     match url {
-        Some(u) => json!({ "startUrls": [{ "url": u }] }),
-        None => json!({}),
+        Some(u) => json!({
+            "startUrls": [{ "url": u }],
+            "maxCrawlPages": 1,
+            "crawlerType": "playwright:firefox"
+        }),
+        None => json!({ "maxCrawlPages": 1 }),
     }
 }
 
@@ -255,7 +259,7 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
     // ── Infer status ─────────────────────────────────────────────────────────
     // Check the page header (first 300 chars) first — status pages put current
     // status at the top. Only fall back to full-text if header is ambiguous.
-    let header = if combined.len() > 300 { &combined[..300] } else { combined.as_str() };
+    let header = if combined.len() > 500 { &combined[..500] } else { combined.as_str() };
 
     const DEGRADED_SIGNALS: &[&str] = &[
         "degraded", "degradation", "regression", "failing", "failure",
@@ -266,7 +270,12 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
         "nominal", "healthy", "stable", " green ", "operational", "normal",
         "all systems", "return to normal", "resolved", "collecting baseline data",
     ];
-    const NEGATIONS: &[&str] = &["not degraded", "no degradation", "not failing", "not down"];
+    // Phrases that contain a degraded keyword but mean the opposite
+    const NEGATIONS: &[&str] = &[
+        "not degraded", "no degradation", "not failing", "not down",
+        "degradation detection paused", "degradation detection",
+        "resuming statistical degradation", "before resuming",
+    ];
 
     let (status, confidence, reason) = if let Some(s) = explicit_status {
         // Structured status wins
@@ -440,8 +449,17 @@ mod tests {
     fn test_normalize_apify_negation_not_degraded() {
         let raw = json!([{ "text": "Claude Code is not degraded. All systems normal." }]);
         let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        // "not degraded" should not classify as degraded; "normal" → nominal
         assert_ne!(h["status"], "degraded");
+    }
+
+    #[test]
+    fn test_normalize_apify_marginlab_collecting_baseline() {
+        // Real marginlab.ai text when a new model is being baselined
+        let raw = json!([{ "text": "Claude Code Opus 4.8 Performance Tracker\nWe are collecting a fresh Opus 4.8 baseline on SWE tasks before resuming statistical degradation detection.\nNew model — collecting baseline data. Degradation detection paused.\nStatus\nCollecting baseline data" }]);
+        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
+        assert_eq!(h["status"], "nominal",
+            "marginlab 'collecting baseline data / degradation detection paused' should be nominal, got: {}",
+            h["status"]);
     }
 
     #[test]
