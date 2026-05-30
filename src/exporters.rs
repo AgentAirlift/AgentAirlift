@@ -12,21 +12,47 @@ pub struct HandoffContext<'a> {
 pub fn export_for_target(target: &str, turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
     match target {
         "codex" => export_codex(turns, output_dir),
+        "claude-code" => export_claude_code(turns, output_dir),
         "kiro" => export_kiro(turns, output_dir),
         "opencode" => export_opencode(turns, output_dir),
         _ => Err(anyhow::anyhow!("Unsupported target: {}", target)),
     }
 }
 
+fn export_claude_code(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Readable export for the Box audit bundle. The resume-compatible native
+    // session is written separately by `native_session` into ~/.claude/projects
+    // and exports/native/claude-code/.
+    let mut lines = vec![json!({
+        "_meta": "agent-airlift-export",
+        "format": "claude-code-like",
+        "resume_compatible": false,
+        "note": "Readable export. A native resume-compatible session is installed under ~/.claude/projects and exports/native/claude-code/."
+    }).to_string()];
+    for turn in turns {
+        let line = json!({
+            "type": turn.role,
+            "uuid": turn.id,
+            "timestamp": turn.timestamp,
+            "message": {"role": turn.role, "content": turn.content},
+            "tool_calls": turn.tool_calls,
+        });
+        lines.push(line.to_string());
+    }
+
+    crate::fs_util::write_jsonl(&output_dir.join("claude-code-like.session.jsonl"), &lines)?;
+    Ok(())
+}
+
 fn export_codex(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
-    // Leading meta line documents provenance. This is a readable, deterministic
-    // Agent Airlift export — NOT a native Codex rollout file. Native `codex resume`
-    // compatibility is not guaranteed; use this to seed a fresh session.
+    // Leading meta line documents provenance. This is the readable export kept
+    // for the Box audit bundle. The resume-compatible native rollout is written
+    // separately by `native_session` into ~/.codex/sessions and exports/native/codex/.
     let mut lines = vec![json!({
         "_meta": "agent-airlift-export",
         "format": "codex-like",
         "resume_compatible": false,
-        "note": "Readable export for resuming context, not a native Codex session file."
+        "note": "Readable export. A native resume-compatible rollout is installed under ~/.codex/sessions and exports/native/codex/."
     }).to_string()];
     for turn in turns {
         let line = json!({

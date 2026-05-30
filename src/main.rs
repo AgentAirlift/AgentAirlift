@@ -5,6 +5,7 @@ pub mod canonical;
 pub mod repo_snapshot;
 pub mod provider_health;
 pub mod exporters;
+pub mod native_session;
 pub mod audit;
 pub mod fs_util;
 pub mod box_vault;
@@ -31,11 +32,14 @@ fn main() -> anyhow::Result<()> {
             box_upload,
             box_dry_run,
             box_parent_folder_id,
+            skip_native_install,
+            native_home,
         } => run_migration(
             session, project, out, source, targets,
             provider_health, provider_health_file,
             apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
             box_upload, box_dry_run, box_parent_folder_id,
+            skip_native_install, native_home,
         ),
         cli::Commands::Health {
             source,
@@ -68,6 +72,8 @@ fn run_migration(
     box_upload: bool,
     box_dry_run: bool,
     box_parent_folder_id: Option<String>,
+    skip_native_install: bool,
+    native_home: Option<String>,
 ) -> anyhow::Result<()> {
     println!("🚀 Agent Airlift Demo");
     println!("Source: {}", source);
@@ -166,6 +172,25 @@ fn run_migration(
     for target in &config.target_providers {
         println!("   → {}", target);
         exporters::export_for_target(target, &canonical_turns, &config.output_dir.join("exports"))?;
+    }
+
+    // 6b. Install native resume-compatible sessions (claude-code / codex)
+    let home = native_home
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let exports_dir = config.output_dir.join("exports");
+    for target in &config.target_providers {
+        if let Some(res) = native_session::install_native(
+            target, &canonical_turns, &config.project_path, &home, &exports_dir, skip_native_install,
+        )? {
+            println!("✅ Native {} session: {}", target, res.path.display());
+            println!("   To resume:");
+            if let Some(cd) = &res.cd_hint {
+                println!("     cd {}", cd);
+            }
+            println!("     {}", res.resume_cmd);
+        }
     }
     
     // 7. Create handoff documentation

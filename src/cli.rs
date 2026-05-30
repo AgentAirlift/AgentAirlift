@@ -68,6 +68,14 @@ pub enum Commands {
         /// Box parent folder ID (overrides BOX_PARENT_FOLDER_ID env var)
         #[arg(long)]
         box_parent_folder_id: Option<String>,
+
+        /// Skip installing native resume-compatible sessions into ~/.codex / ~/.claude
+        #[arg(long, default_value_t = false)]
+        skip_native_install: bool,
+
+        /// Override the agent home root for native installs (tests / non-default $HOME)
+        #[arg(long)]
+        native_home: Option<String>,
     },
 
     /// Refresh the provider-health signal only (no migration, no Box)
