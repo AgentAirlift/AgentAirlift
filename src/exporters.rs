@@ -1,5 +1,4 @@
 use serde_json::{json, Value};
-use std::fs;
 use crate::canonical::CanonicalTurn;
 
 /// Lightweight context extracted from session + repo + health for doc generation.
@@ -348,6 +347,7 @@ cargo test
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
     use serde_json::json;
 
