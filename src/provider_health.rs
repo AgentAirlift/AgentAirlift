@@ -226,6 +226,16 @@ fn build_input(url: Option<&str>) -> Value {
     }
 }
 
+/// Returns the default marginlab tracker URL for a known provider.
+/// Used when --apify-input-url is not explicitly set.
+pub fn default_tracker_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "claude-code" => Some("https://marginlab.ai/trackers/claude-code/"),
+        "codex"       => Some("https://marginlab.ai/trackers/codex/"),
+        _             => None,
+    }
+}
+
 /// Best-effort normalization of an Apify response into our provider-health shape.
 /// Handles both structured (provider/status fields) and scraped (text/markdown/html) outputs.
 fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url: Option<&str>) -> Value {
@@ -252,6 +262,8 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
     // ── Infer provider ───────────────────────────────────────────────────────
     let inferred_provider = if combined.contains("claude code") || combined.contains("claude-code") {
         "claude-code"
+    } else if combined.contains("codex") {
+        "codex"
     } else {
         provider
     };

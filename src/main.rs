@@ -101,7 +101,8 @@ fn run_demo(
             token: &token,
             actor_id: apify_actor_id.as_deref().or(actor_id_env.as_deref()),
             task_id: apify_task_id.as_deref().or(task_id_env.as_deref()),
-            input_url: apify_input_url.as_deref(),
+            input_url: apify_input_url.as_deref()
+                .or_else(|| provider_health::default_tracker_url(&config.source_provider)),
             provider: &config.source_provider,
         };
         let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
