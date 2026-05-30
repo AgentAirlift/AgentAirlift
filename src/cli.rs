@@ -40,6 +40,22 @@ pub enum Commands {
         #[arg(long)]
         provider_health_file: Option<String>,
 
+        /// Apify actor ID (overrides APIFY_ACTOR_ID env var)
+        #[arg(long)]
+        apify_actor_id: Option<String>,
+
+        /// Apify task ID (overrides APIFY_TASK_ID env var)
+        #[arg(long)]
+        apify_task_id: Option<String>,
+
+        /// URL to pass as input to the Apify actor/task
+        #[arg(long)]
+        apify_input_url: Option<String>,
+
+        /// Fallback cache file if Apify live call fails
+        #[arg(long)]
+        apify_cache_file: Option<String>,
+
         /// Upload output to Box
         #[arg(long, default_value_t = false)]
         box_upload: bool,

@@ -24,10 +24,19 @@ fn main() -> anyhow::Result<()> {
             targets,
             provider_health,
             provider_health_file,
+            apify_actor_id,
+            apify_task_id,
+            apify_input_url,
+            apify_cache_file,
             box_upload,
             box_dry_run,
             box_parent_folder_id,
-        } => run_demo(session, project, out, source, targets, provider_health, provider_health_file, box_upload, box_dry_run, box_parent_folder_id),
+        } => run_demo(
+            session, project, out, source, targets,
+            provider_health, provider_health_file,
+            apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
+            box_upload, box_dry_run, box_parent_folder_id,
+        ),
     }
 }
 
@@ -39,6 +48,10 @@ fn run_demo(
     targets: Vec<String>,
     provider_health: String,
     provider_health_file: Option<String>,
+    apify_actor_id: Option<String>,
+    apify_task_id: Option<String>,
+    apify_input_url: Option<String>,
+    apify_cache_file: Option<String>,
     box_upload: bool,
     box_dry_run: bool,
     box_parent_folder_id: Option<String>,
@@ -49,7 +62,7 @@ fn run_demo(
     
     // Load configuration
     let config = config::Config::from_cli(
-        session, project, out, source, targets, provider_health, provider_health_file,
+        session, project, out, source, targets, provider_health.clone(), provider_health_file.clone(),
     )?;
     
     // Create output directories
@@ -78,10 +91,27 @@ fn run_demo(
     
     // 3. Load provider health
     println!("🏥 Loading provider health...");
-    let provider_health_data = provider_health::load_provider_health(
-        &config.provider_health_source,
-        config.provider_health_file.as_deref(),
-    )?;
+    let (provider_health_data, apify_warnings) = if provider_health == "apify" {
+        // Only read token when apify mode is explicitly requested
+        let token = std::env::var("APIFY_API_TOKEN")
+            .map_err(|_| anyhow::anyhow!("APIFY_API_TOKEN env var is not set"))?;
+        let actor_id_env = std::env::var("APIFY_ACTOR_ID").ok();
+        let task_id_env = std::env::var("APIFY_TASK_ID").ok();
+        let cfg = provider_health::ApifyConfig {
+            token: &token,
+            actor_id: apify_actor_id.as_deref().or(actor_id_env.as_deref()),
+            task_id: apify_task_id.as_deref().or(task_id_env.as_deref()),
+            input_url: apify_input_url.as_deref(),
+            provider: &config.source_provider,
+        };
+        let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
+        let (health, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
+        (health, warnings)
+    } else {
+        let file_path = provider_health_file.as_deref().map(std::path::Path::new);
+        let health = provider_health::load_provider_health(&provider_health, file_path)?;
+        (health, vec![])
+    };
     fs_util::write_json_pretty(
         &config.output_dir.join("raw/provider-health.json"),
         &provider_health_data,
@@ -129,9 +159,11 @@ fn run_demo(
     
     // 8. Create audit reports
     println!("📊 Creating audit reports...");
+    let mut all_warnings = import_warnings.clone();
+    all_warnings.extend(apify_warnings);
     audit::create_audit_report(
         &canonical_turns,
-        &import_warnings,
+        &all_warnings,
         &dropped_fields,
         &config.output_dir.join("audit"),
     )?;
