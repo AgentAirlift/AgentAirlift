@@ -1,0 +1,7 @@
+{
+  "name": "agent-airlift",
+  "displayName": "Agent Airlift",
+  "version": "0.1.0",
+  "description": "Check Claude Code provider health and airlift the current session to Codex when degraded.",
+  "keywords": ["agent-airlift", "handoff", "provider-health", "migration"]
+}
