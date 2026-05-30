@@ -69,9 +69,12 @@ session in the target tool.
 # file mode (no network, no token)
 --provider-health file --provider-health-file examples/provider-health/degraded.apify.cached.json
 
-# apify mode: live call if APIFY_API_TOKEN + actor/task id are set,
-# otherwise falls back to --apify-cache-file (source becomes "cached-apify")
---provider-health apify --apify-cache-file examples/provider-health/degraded.apify.cached.json
+# apify mode: scrapes the live tracker; falls back to cache if token missing or run fails
+# "Collecting baseline data" on the tracker page is treated as nominal (healthy)
+--provider-health apify \
+  --apify-actor-id apify~website-content-crawler \
+  --apify-input-url https://marginlab.ai/trackers/claude-code/ \
+  --apify-cache-file examples/provider-health/degraded.apify.cached.json
 ```
 
 Generated docs distinguish the signal source from the evaluated provider, e.g.

@@ -264,7 +264,7 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
     ];
     const NOMINAL_SIGNALS: &[&str] = &[
         "nominal", "healthy", "stable", " green ", "operational", "normal",
-        "all systems", "return to normal", "resolved",
+        "all systems", "return to normal", "resolved", "collecting baseline data",
     ];
     const NEGATIONS: &[&str] = &["not degraded", "no degradation", "not failing", "not down"];
 
@@ -426,6 +426,14 @@ mod tests {
         let raw = json!([{ "text": "Claude Code is operational and stable today." }]);
         let h = normalize_apify_response(&raw, "claude-code", "apify", None);
         assert_eq!(h["status"], "nominal");
+    }
+
+    #[test]
+    fn test_normalize_apify_collecting_baseline_is_nominal() {
+        // marginlab.ai shows "Collecting baseline data" for new models — treat as healthy
+        let raw = json!([{ "text": "Claude Code Opus 4.8 Performance Tracker\nCollecting baseline data" }]);
+        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
+        assert_eq!(h["status"], "nominal", "collecting baseline data should be nominal");
     }
 
     #[test]
