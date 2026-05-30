@@ -33,3 +33,4 @@ target
 /airlift-out
 /*/SPEC.md
 .DS_Store
+hardening-spec.md
