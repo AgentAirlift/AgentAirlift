@@ -103,12 +103,16 @@ fn health_summary(health: Option<&Value>, evaluated_provider: &str) -> String {
     match health {
         None => "No provider health data available. Assume all providers operational.".into(),
         Some(h) => {
-            let signal_source = h.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
+            // `source` = signal origin (apify, cached-apify, file, mock)
+            // `provider` = evaluated provider (claude-code, etc.)
+            let signal_source = h.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let provider      = h.get("provider").and_then(|v| v.as_str()).unwrap_or(evaluated_provider);
             let status        = h.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let message       = h.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let reason        = h.get("reason").or_else(|| h.get("message"))
+                                  .and_then(|v| v.as_str()).unwrap_or("");
             format!(
                 "Provider health signal from `{}`: `{}` is **{}**. {}",
-                signal_source, evaluated_provider, status, message
+                signal_source, provider, status, reason
             )
         }
     }
@@ -480,9 +484,10 @@ mod tests {
     #[test]
     fn test_health_summary_distinguishes_signal_source_from_evaluated_provider() {
         let health = json!({
-            "provider": "apify",
+            "provider": "claude-code",
+            "source": "apify",
             "status": "degraded",
-            "message": "High latency detected"
+            "reason": "High latency detected"
         });
         let summary = health_summary(Some(&health), "claude-code");
         // Signal source (apify) and evaluated provider (claude-code) must both appear

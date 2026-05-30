@@ -104,7 +104,14 @@ fn run_demo(
             provider: &config.source_provider,
         };
         let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
-        let (health, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
+        let (health, raw_apify, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
+        // Save raw Apify response if we got one
+        if let Some(ref raw) = raw_apify {
+            fs_util::write_json_pretty(
+                &config.output_dir.join("raw/apify-response.json"),
+                raw,
+            )?;
+        }
         (health, warnings)
     } else {
         let file_path = provider_health_file.as_deref().map(std::path::Path::new);
