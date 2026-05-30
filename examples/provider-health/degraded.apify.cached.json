@@ -2,7 +2,7 @@
   "provider": "claude-code",
   "status": "degraded",
   "confidence": 0.74,
-  "reason": "Synthetic cached Apify fixture: Claude Code tracker indicates degraded coding reliability / high latency.",
+  "reason": "Cached Apify fallback: live tracker is currently collecting a fresh baseline, so Agent Airlift used a demo failover signal indicating degraded Claude Code reliability / high latency.",
   "source": "cached-apify",
   "source_url": "https://marginlab.ai/trackers/claude-code/",
   "observed_at": "2026-05-29T19:00:00Z",

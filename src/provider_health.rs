@@ -309,7 +309,7 @@ mod tests {
         let health = load_provider_health("file", Some(path)).unwrap();
         assert_eq!(health["provider"].as_str(), Some("claude-code"));
         assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(health["reason"].as_str().unwrap().contains("Synthetic"));
+        assert!(health["reason"].as_str().unwrap().contains("Cached Apify fallback"));
     }
 
     #[test]
