@@ -371,7 +371,7 @@ The session has been migrated to: {targets}.
 
 ## Constraints
 - Do not repeat work already listed in "Work Already Completed".
-- Do not call Box or Apify APIs — they are not yet implemented.
+- Do not call Box or Apify APIs unless explicitly requested; existing artifacts already include the provider-health signal and audit vault state.
 - Keep changes deterministic and local unless explicitly instructed otherwise.
 - Preserve unknown fields in any JSONL you read or write.
 
