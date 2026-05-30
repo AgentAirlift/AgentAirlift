@@ -112,7 +112,7 @@ fn stub_health(provider: &str, source: &str) -> Value {
 
 fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(600))
         .build()?;
 
     // Prefer actor over task
@@ -163,7 +163,7 @@ fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
 
     // Poll until terminal state (max ~90 more seconds).
     let run_status_url = format!("https://api.apify.com/v2/actor-runs/{}", run_id);
-    let terminal = poll_run_until_done(&client, cfg.token, &run_status_url, 18, 5)?;
+    let terminal = poll_run_until_done(&client, cfg.token, &run_status_url, 90, 5)?;
     if terminal != "SUCCEEDED" {
         anyhow::bail!("Apify run {} ended with status '{}'", run_id, terminal);
     }
