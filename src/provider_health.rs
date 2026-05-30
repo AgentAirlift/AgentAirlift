@@ -111,7 +111,9 @@ fn stub_health(provider: &str, source: &str) -> Value {
 }
 
 fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
 
     // Prefer actor over task
     let (run_url, input_body) = if let Some(actor_id) = cfg.actor_id {
@@ -128,10 +130,11 @@ fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
         anyhow::bail!("Either --apify-actor-id or --apify-task-id is required for apify mode");
     };
 
-    // Start run (synchronous via ?waitForFinish)
-    let run_url = format!("{}?waitForFinish=60", run_url);
+    // Start run with waitForFinish; on free plans the run may still be RUNNING
+    // when the server-side timeout fires, so we poll until SUCCEEDED/FAILED.
+    let start_url = format!("{}?waitForFinish=60", run_url);
     let resp = client
-        .post(&run_url)
+        .post(&start_url)
         .bearer_auth(cfg.token)
         .json(&input_body)
         .send()
@@ -140,14 +143,30 @@ fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
-        anyhow::bail!("Apify run failed ({}): {}", status, text);
+        anyhow::bail!("Apify run failed ({}): {}", status, &text[..text.len().min(400)]);
     }
 
-    let run: Value = serde_json::from_str(&text).context("Failed to parse Apify run response")?;
-    let dataset_id = run
+    let run_resp: Value =
+        serde_json::from_str(&text).context("Failed to parse Apify run response")?;
+
+    // Extract run id and dataset id — present whether run finished or is still running.
+    let run_id = run_resp
+        .pointer("/data/id")
+        .and_then(|v| v.as_str())
+        .context("Apify run response missing data.id")?
+        .to_string();
+    let dataset_id = run_resp
         .pointer("/data/defaultDatasetId")
         .and_then(|v| v.as_str())
-        .context("Apify run response missing data.defaultDatasetId")?;
+        .context("Apify run response missing data.defaultDatasetId")?
+        .to_string();
+
+    // Poll until terminal state (max ~90 more seconds).
+    let run_status_url = format!("https://api.apify.com/v2/actor-runs/{}", run_id);
+    let terminal = poll_run_until_done(&client, cfg.token, &run_status_url, 18, 5)?;
+    if terminal != "SUCCEEDED" {
+        anyhow::bail!("Apify run {} ended with status '{}'", run_id, terminal);
+    }
 
     // Fetch dataset items
     let items_url = format!(
@@ -164,6 +183,36 @@ fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
     let items: Value =
         serde_json::from_str(&items_text).context("Failed to parse Apify dataset items")?;
     Ok(items)
+}
+
+/// Poll the run status endpoint every `interval_secs` up to `max_polls` times.
+/// Returns the terminal status string ("SUCCEEDED", "FAILED", "ABORTED", …).
+fn poll_run_until_done(
+    client: &reqwest::blocking::Client,
+    token: &str,
+    run_url: &str,
+    max_polls: u32,
+    interval_secs: u64,
+) -> anyhow::Result<String> {
+    for _ in 0..max_polls {
+        let resp = client
+            .get(run_url)
+            .bearer_auth(token)
+            .send()
+            .context("Apify run status poll failed")?;
+        let text = resp.text().unwrap_or_default();
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let s = v
+            .pointer("/data/status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("UNKNOWN")
+            .to_string();
+        match s.as_str() {
+            "SUCCEEDED" | "FAILED" | "ABORTED" | "TIMED-OUT" => return Ok(s),
+            _ => std::thread::sleep(std::time::Duration::from_secs(interval_secs)),
+        }
+    }
+    anyhow::bail!("Apify run did not reach a terminal state within the polling window")
 }
 
 fn build_input(url: Option<&str>) -> Value {
@@ -204,13 +253,18 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
     };
 
     // ── Infer status ─────────────────────────────────────────────────────────
+    // Check the page header (first 300 chars) first — status pages put current
+    // status at the top. Only fall back to full-text if header is ambiguous.
+    let header = if combined.len() > 300 { &combined[..300] } else { combined.as_str() };
+
     const DEGRADED_SIGNALS: &[&str] = &[
         "degraded", "degradation", "regression", "failing", "failure",
         "down", "outage", "unhealthy", "high latency", "latency spike",
-        "worse", " red ", "incident",
+        "worse", " red ", "incident", "elevated error",
     ];
     const NOMINAL_SIGNALS: &[&str] = &[
         "nominal", "healthy", "stable", " green ", "operational", "normal",
+        "all systems", "return to normal", "resolved",
     ];
     const NEGATIONS: &[&str] = &["not degraded", "no degradation", "not failing", "not down"];
 
@@ -220,10 +274,12 @@ fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url
         let r = explicit_reason.unwrap_or("Apify response received but no explicit status field was found.").to_string();
         (s.to_string(), c, r)
     } else {
-        // Infer from text
+        // Check header first; if ambiguous, check full text.
         let negated = NEGATIONS.iter().any(|n| combined.contains(n));
-        let has_degraded = !negated && DEGRADED_SIGNALS.iter().any(|s| combined.contains(s));
-        let has_nominal = NOMINAL_SIGNALS.iter().any(|s| combined.contains(s));
+        let header_nominal = NOMINAL_SIGNALS.iter().any(|s| header.contains(s));
+        let header_degraded = !negated && DEGRADED_SIGNALS.iter().any(|s| header.contains(s));
+        let has_degraded = !negated && !header_nominal && (header_degraded || DEGRADED_SIGNALS.iter().any(|s| combined.contains(s)));
+        let has_nominal = header_nominal || NOMINAL_SIGNALS.iter().any(|s| combined.contains(s));
 
         if has_degraded {
             (
