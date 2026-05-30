@@ -6,9 +6,11 @@ It imports a session, normalizes it to a canonical schema, and emits handoff
 docs plus readable, target-shaped exports. Optional Box upload and Apify
 provider-health signal ingestion are supported but never required.
 
-> Scope note: Agent Airlift does **not** auto-detect provider degradation and has
-> **no plugin system**. Transfers are explicit and deterministic. No AI APIs are
-> called during generation.
+> Scope note: The core CLI is deterministic and calls **no AI APIs** during
+> generation. Transfers are always **explicit**. Optional Claude Code / Codex
+> plugins (see [`plugins/`](plugins/)) add **on-demand** provider-health checks
+> and recommend a transfer when a provider looks degraded — but they only ever
+> invoke the same explicit migration workflow described here.
 
 ## Quick start
 
@@ -31,6 +33,18 @@ replay/      agent-airlift.session.jsonl
 exports/     HANDOFF.md, AGENTS.md, codex/kiro/opencode exports, .kiro specs
 audit/       conversion-report.md, warnings.json, dropped-fields.json,
              import-diagnostics.json, upload-manifest.json (if Box used)
+```
+
+`demo` is an alias of `migrate` (the full pipeline). A lightweight `health`
+subcommand runs only the provider-health step and persists
+`<out>/provider-health.json` — useful for the plugins below:
+
+```bash
+cargo run -- health --source claude-code \
+  --provider-health apify \
+  --apify-cache-file examples/provider-health/degraded.apify.cached.json
+# prints the normalized signal + a line:
+# AIRLIFT_HEALTH status=degraded provider=claude-code confidence=0.74 source=cached-apify
 ```
 
 ## Supported import formats
@@ -89,6 +103,22 @@ Generated docs distinguish the signal source from the evaluated provider, e.g.
 
 The upload manifest records Box folder/file IDs and URLs. Tokens are never
 written to any output artifact.
+
+## Plugins (optional)
+
+On-demand Claude Code and Codex plugins live under [`plugins/`](plugins/) and add
+two slash commands each:
+
+- `/airlift-check` — refresh the provider-health signal; if the active provider
+  looks **degraded**, recommend airlifting to the other harness.
+- `/airlift-migrate` — run the (unchanged) migration pipeline on the current
+  session and emit a handoff bundle for the other harness.
+
+Pairing is cross-tool: the Claude plugin checks `claude-code` and airlifts to
+`codex`; the Codex plugin checks `codex` and airlifts to `claude-code`. The
+plugins are thin front-ends that shell out to `agent-airlift health` / `migrate`
+— no new conversion logic. See [`plugins/SPEC.md`](plugins/SPEC.md) and each
+plugin's README for install and configuration.
 
 ## Tests
 
