@@ -1,0 +1,18 @@
+[package]
+name = "agent-airlift"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["serde", "v4"] }
+regex = "1.10"
+walkdir = "2.5"
+dotenvy = "0.15"
+
+[dev-dependencies]
+tempfile = "3.10"
