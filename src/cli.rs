@@ -57,18 +57,6 @@ pub enum Commands {
         #[arg(long)]
         apify_cache_file: Option<String>,
 
-        /// Upload output to Box
-        #[arg(long, default_value_t = false)]
-        box_upload: bool,
-
-        /// Dry-run Box upload (print what would be uploaded, no API calls)
-        #[arg(long, default_value_t = false)]
-        box_dry_run: bool,
-
-        /// Box parent folder ID (overrides BOX_PARENT_FOLDER_ID env var)
-        #[arg(long)]
-        box_parent_folder_id: Option<String>,
-
         /// Skip installing native resume-compatible sessions into ~/.codex / ~/.claude
         #[arg(long, default_value_t = false)]
         skip_native_install: bool,
@@ -78,7 +66,7 @@ pub enum Commands {
         native_home: Option<String>,
     },
 
-    /// Refresh the provider-health signal only (no migration, no Box)
+    /// Refresh the provider-health signal only (no migration)
     Health {
         /// Provider being evaluated (e.g., claude-code)
         #[arg(long)]
@@ -112,4 +100,46 @@ pub enum Commands {
         #[arg(long)]
         apify_cache_file: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn migrate_rejects_box_upload_flags() {
+        let result = Cli::try_parse_from([
+            "agent-airlift",
+            "migrate",
+            "--session",
+            "examples/sessions/claude-code-realistic.jsonl",
+            "--project",
+            "examples/projects/tiny-rust-cli",
+            "--out",
+            "airlift-out",
+            "--source",
+            "claude-code",
+            "--targets",
+            "codex",
+            "--box-upload",
+        ]);
+
+        assert!(result.is_err(), "Box upload flags should not be accepted");
+    }
+
+    #[test]
+    fn migrate_help_does_not_advertise_box_upload() {
+        let mut help = Vec::new();
+        Cli::command()
+            .find_subcommand_mut("migrate")
+            .expect("migrate subcommand exists")
+            .write_long_help(&mut help)
+            .expect("help renders");
+        let help = String::from_utf8(help).expect("help is utf8");
+
+        assert!(!help.contains("box-upload"));
+        assert!(!help.contains("box-dry-run"));
+        assert!(!help.contains("box-parent-folder-id"));
+    }
 }

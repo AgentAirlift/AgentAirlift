@@ -7,7 +7,7 @@
 //!   the project dir *is* the (`/`→`-` encoded) folder name.
 //!
 //! A native-format copy is always written into `exports/native/<target>/` (for
-//! the Box audit bundle); unless `skip_install`, the same file is installed into
+//! the generated export bundle); unless `skip_install`, the same file is installed into
 //! the real store so the target tool can resume it.
 
 use crate::canonical::CanonicalTurn;
@@ -387,7 +387,7 @@ mod tests {
         assert!(lines.iter().any(|l| l["type"] == "response_item"));
         // trailing migration meta
         assert_eq!(lines.last().unwrap()["type"], "agent-airlift-migration");
-        // export copy also written for Box
+        // export copy also written for the handoff bundle
         assert!(exports.path().join("native/codex").read_dir().unwrap().count() == 1);
     }
 

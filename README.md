@@ -3,8 +3,8 @@
 A local, deterministic CLI that performs a **manual transfer** of an AI coding
 session from one agent to another (e.g. Claude Code → Codex / Kiro / OpenCode).
 It imports a session, normalizes it to a canonical schema, and emits handoff
-docs plus readable, target-shaped exports. Optional Box upload and Apify
-provider-health signal ingestion are supported but never required.
+docs plus readable, target-shaped exports. Optional Apify provider-health signal
+ingestion is supported but never required.
 
 > Scope note: The core CLI is deterministic and calls **no AI APIs** during
 > generation. Transfers are always **explicit**. Optional Claude Code / Codex
@@ -32,7 +32,7 @@ normalized/  canonical-session.json (deterministic schema)
 replay/      agent-airlift.session.jsonl
 exports/     HANDOFF.md, AGENTS.md, codex/kiro/opencode exports, .kiro specs
 audit/       conversion-report.md, warnings.json, dropped-fields.json,
-             import-diagnostics.json, upload-manifest.json (if Box used)
+             import-diagnostics.json
 ```
 
 `demo` is an alias of `migrate` (the full pipeline). A lightweight `health`
@@ -93,16 +93,6 @@ session in the target tool.
 
 Generated docs distinguish the signal source from the evaluated provider, e.g.
 *"Provider health signal from `cached-apify`: `claude-code` is degraded."*
-
-## Box upload (optional)
-
-```bash
---box-dry-run                      # print plan + manifest, no API calls, no token
---box-upload --box-parent-folder-id <id>   # requires BOX_DEVELOPER_TOKEN
-```
-
-The upload manifest records Box folder/file IDs and URLs. Tokens are never
-written to any output artifact.
 
 ## Plugins (optional)
 

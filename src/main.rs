@@ -8,7 +8,6 @@ pub mod exporters;
 pub mod native_session;
 pub mod audit;
 pub mod fs_util;
-pub mod box_vault;
 
 use clap::Parser;
 use std::fs;
@@ -29,16 +28,12 @@ fn main() -> anyhow::Result<()> {
             apify_task_id,
             apify_input_url,
             apify_cache_file,
-            box_upload,
-            box_dry_run,
-            box_parent_folder_id,
             skip_native_install,
             native_home,
         } => run_migration(
             session, project, out, source, targets,
             provider_health, provider_health_file,
             apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
-            box_upload, box_dry_run, box_parent_folder_id,
             skip_native_install, native_home,
         ),
         cli::Commands::Health {
@@ -69,9 +64,6 @@ fn run_migration(
     apify_task_id: Option<String>,
     apify_input_url: Option<String>,
     apify_cache_file: Option<String>,
-    box_upload: bool,
-    box_dry_run: bool,
-    box_parent_folder_id: Option<String>,
     skip_native_install: bool,
     native_home: Option<String>,
 ) -> anyhow::Result<()> {
@@ -221,36 +213,6 @@ fn run_migration(
     println!("   - Import warnings: {}", diagnostics.warnings.len());
     println!("   - Targets exported: {}", config.target_providers.join(", "));
     println!("   - Output location: {}", config.output_dir.display());
-
-    // ── Box vault ─────────────────────────────────────────────────────────────
-    let project_name = config.project_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "project".to_string());
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let root_folder_name = format!("AgentAirlift-{}-{}", project_name, timestamp);
-    let audit_dir = config.output_dir.join("audit");
-
-    if box_dry_run {
-        box_vault::dry_run(&config.output_dir, &root_folder_name, &audit_dir)?;
-    } else if box_upload {
-        // Only read credentials when --box-upload is explicitly passed
-        let token = std::env::var("BOX_DEVELOPER_TOKEN")
-            .map_err(|_| anyhow::anyhow!("BOX_DEVELOPER_TOKEN env var is not set"))?;
-        let parent_id = box_parent_folder_id
-            .or_else(|| std::env::var("BOX_PARENT_FOLDER_ID").ok())
-            .ok_or_else(|| anyhow::anyhow!(
-                "Box parent folder ID is required: pass --box-parent-folder-id or set BOX_PARENT_FOLDER_ID"
-            ))?;
-        let cfg = box_vault::BoxConfig {
-            token,
-            parent_folder_id: parent_id,
-            root_folder_name,
-        };
-        box_vault::upload(&cfg, &config.output_dir, &audit_dir)?;
-    } else {
-        println!("\nBox upload disabled. Local artifacts only.");
-    }
 
     Ok(())
 }

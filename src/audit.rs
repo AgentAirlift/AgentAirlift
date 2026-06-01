@@ -194,7 +194,6 @@ mod tests {
     fn test_secret_guard_distinguishes_value_from_var_name() {
         // Mentioning the variable name is fine.
         assert!(!looks_like_secret("APIFY_API_TOKEN not set; skipping live Apify call."));
-        assert!(!looks_like_secret("Set BOX_DEVELOPER_TOKEN to enable upload."));
         // Actual leaked values are caught.
         assert!(looks_like_secret("Authorization: Bearer eyJhbGciOiJIUzI1Ni) leaked"));
         assert!(looks_like_secret("{\"token\":\"abcd1234efgh5678\"}"));

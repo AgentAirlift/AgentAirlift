@@ -20,9 +20,8 @@ pub fn export_for_target(target: &str, turns: &[CanonicalTurn], output_dir: &std
 }
 
 fn export_claude_code(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
-    // Readable export for the Box audit bundle. The resume-compatible native
-    // session is written separately by `native_session` into ~/.claude/projects
-    // and exports/native/claude-code/.
+    // Readable export. The resume-compatible native session is written separately
+    // by `native_session` into ~/.claude/projects and exports/native/claude-code/.
     let mut lines = vec![json!({
         "_meta": "agent-airlift-export",
         "format": "claude-code-like",
@@ -46,8 +45,8 @@ fn export_claude_code(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> 
 
 fn export_codex(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
     // Leading meta line documents provenance. This is the readable export kept
-    // for the Box audit bundle. The resume-compatible native rollout is written
-    // separately by `native_session` into ~/.codex/sessions and exports/native/codex/.
+    // alongside the resume-compatible native rollout written separately by
+    // `native_session` into ~/.codex/sessions and exports/native/codex/.
     let mut lines = vec![json!({
         "_meta": "agent-airlift-export",
         "format": "codex-like",
@@ -184,7 +183,7 @@ fn extract_decisions(turns: &[CanonicalTurn]) -> Vec<String> {
 /// Commands from assistant content heuristics AND structured Bash tool calls.
 fn extract_commands(turns: &[CanonicalTurn]) -> Vec<String> {
     let mut out = Vec::new();
-    let mut push = |cmd: &str, out: &mut Vec<String>| {
+    let push = |cmd: &str, out: &mut Vec<String>| {
         let entry = format!("- `{}`", cmd.trim());
         if !cmd.trim().is_empty() && !out.contains(&entry) { out.push(entry); }
     };
@@ -397,7 +396,7 @@ The session has been migrated to: {targets}.
 
 ## Constraints
 - Do not repeat work already listed in "Work Already Completed".
-- Do not call Box or Apify APIs unless explicitly requested; existing artifacts already include the provider-health signal and audit vault state.
+- Do not call Apify APIs unless explicitly requested; existing artifacts already include the provider-health signal.
 - Keep changes deterministic and local unless explicitly instructed otherwise.
 - Preserve unknown fields in any JSONL you read or write.
 
