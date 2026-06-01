@@ -3,14 +3,11 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-pub struct ApifyConfig<'a> {
-    pub token: &'a str,
-    /// actor ID or task ID (actor takes precedence)
-    pub actor_id: Option<&'a str>,
-    pub task_id: Option<&'a str>,
-    pub input_url: Option<&'a str>,
-    /// evaluated provider name (from --source)
+pub struct MarginlabConfig<'a> {
+    /// Evaluated provider name from --source.
     pub provider: &'a str,
+    /// Direct Marginlab tracker page URL.
+    pub tracker_url: &'a str,
 }
 
 pub fn load_provider_health(
@@ -27,54 +24,35 @@ pub fn load_provider_health(
     }
 }
 
-/// Called when --provider-health apify is used.
-/// Returns (normalized_health, raw_apify_response_if_any, warnings).
-/// Only reads the token here; never called from file/none paths.
-pub fn load_provider_health_apify(
-    cfg: &ApifyConfig<'_>,
+/// Called when --provider-health marginlab is used.
+/// Returns (normalized_health, raw_marginlab_html_if_any, warnings).
+pub fn load_provider_health_marginlab(
+    cfg: &MarginlabConfig<'_>,
     cache_file: Option<&Path>,
-) -> (Value, Option<Value>, Vec<String>) {
+) -> (Value, Option<String>, Vec<String>) {
     let mut warnings = Vec::new();
 
-    // If no token, skip live call entirely and go straight to cache/unknown
-    let live_result: anyhow::Result<Value> = if cfg.token.is_empty() {
-        warnings.push("APIFY_API_TOKEN not set; skipping live Apify call.".into());
-        Err(anyhow::anyhow!("no token"))
-    } else {
-        fetch_apify(cfg)
-    };
-
-    match live_result {
-        Ok(raw) => {
-            let health = normalize_apify_response(&raw, cfg.provider, "apify", cfg.input_url);
-            // Fix 3: if live succeeded but normalization is unknown, try cache
-            if health["status"] == "unknown" {
+    match fetch_marginlab(cfg.tracker_url) {
+        Ok(body) => {
+            let health = normalize_marginlab_response(&body, cfg.provider, cfg.tracker_url);
+            if should_use_cache_for_unrecognized_marginlab(&health) {
                 if let Some(path) = cache_file {
-                    if let Ok(mut cached) = load_from_file(Some(path)) {
+                    if let Ok(cached) = load_cached_health(path, "cached-marginlab") {
                         warnings.push(
-                            "Live Apify response was received but could not be normalized; \
-                             using cached Apify fixture.".into(),
+                            "Marginlab response was received but no clear status was found; \
+                             using cached provider-health fixture.".into(),
                         );
-                        if let Some(obj) = cached.as_object_mut() {
-                            obj.insert("source".into(), json!("cached-apify"));
-                        }
-                        return (cached, Some(raw), warnings);
+                        return (cached, Some(body), warnings);
                     }
                 }
             }
-            (health, Some(raw), warnings)
+            (health, Some(body), warnings)
         }
         Err(e) => {
-            if !e.to_string().contains("no token") {
-                warnings.push(format!("Apify live call failed: {}", e));
-            }
-            // Try cache fallback
+            warnings.push(format!("Marginlab live fetch failed: {}", e));
             if let Some(path) = cache_file {
-                match load_from_file(Some(path)) {
-                    Ok(mut cached) => {
-                        if let Some(obj) = cached.as_object_mut() {
-                            obj.insert("source".into(), json!("cached-apify"));
-                        }
+                match load_cached_health(path, "cached-marginlab") {
+                    Ok(cached) => {
                         warnings.push(format!("Using cached provider health: {}", path.display()));
                         return (cached, None, warnings);
                     }
@@ -82,7 +60,7 @@ pub fn load_provider_health_apify(
                 }
             }
             warnings.push("Provider health status set to unknown.".into());
-            (stub_health(cfg.provider, "apify"), None, warnings)
+            (stub_health(cfg.provider, "marginlab"), None, warnings)
         }
     }
 }
@@ -98,6 +76,14 @@ fn load_from_file(file_path: Option<&Path>) -> anyhow::Result<Value> {
         .with_context(|| format!("Invalid JSON in provider health file: {}", path.display()))
 }
 
+fn load_cached_health(path: &Path, source: &str) -> anyhow::Result<Value> {
+    let mut cached = load_from_file(Some(path))?;
+    if let Some(obj) = cached.as_object_mut() {
+        obj.insert("source".into(), json!(source));
+    }
+    Ok(cached)
+}
+
 fn stub_health(provider: &str, source: &str) -> Value {
     json!({
         "provider": provider,
@@ -110,267 +96,103 @@ fn stub_health(provider: &str, source: &str) -> Value {
     })
 }
 
-fn fetch_apify(cfg: &ApifyConfig<'_>) -> anyhow::Result<Value> {
+fn fetch_marginlab(tracker_url: &str) -> anyhow::Result<String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("agent-airlift/0.1")
         .build()?;
 
-    // Prefer actor over task
-    let (run_url, input_body) = if let Some(actor_id) = cfg.actor_id {
-        (
-            format!("https://api.apify.com/v2/acts/{}/runs", actor_id),
-            build_input(cfg.input_url),
-        )
-    } else if let Some(task_id) = cfg.task_id {
-        (
-            format!("https://api.apify.com/v2/actor-tasks/{}/runs", task_id),
-            build_input(cfg.input_url),
-        )
-    } else {
-        anyhow::bail!("Either --apify-actor-id or --apify-task-id is required for apify mode");
-    };
-
-    // Start run with waitForFinish; on free plans the run may still be RUNNING
-    // when the server-side timeout fires, so we poll until SUCCEEDED/FAILED.
-    let start_url = format!("{}?waitForFinish=60", run_url);
     let resp = client
-        .post(&start_url)
-        .bearer_auth(cfg.token)
-        .json(&input_body)
+        .get(tracker_url)
         .send()
-        .context("Apify run request failed")?;
-
+        .context("Marginlab tracker request failed")?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
-        anyhow::bail!("Apify run failed ({}): {}", status, &text[..text.len().min(400)]);
+        anyhow::bail!(
+            "Marginlab tracker fetch failed ({}): {}",
+            status,
+            &text[..text.len().min(400)]
+        );
     }
-
-    let run_resp: Value =
-        serde_json::from_str(&text).context("Failed to parse Apify run response")?;
-
-    // Extract run id and dataset id — present whether run finished or is still running.
-    let run_id = run_resp
-        .pointer("/data/id")
-        .and_then(|v| v.as_str())
-        .context("Apify run response missing data.id")?
-        .to_string();
-    let dataset_id = run_resp
-        .pointer("/data/defaultDatasetId")
-        .and_then(|v| v.as_str())
-        .context("Apify run response missing data.defaultDatasetId")?
-        .to_string();
-
-    // Poll until terminal state (max ~90 more seconds).
-    let run_status_url = format!("https://api.apify.com/v2/actor-runs/{}", run_id);
-    let terminal = poll_run_until_done(&client, cfg.token, &run_status_url, 90, 5)?;
-    if terminal != "SUCCEEDED" {
-        anyhow::bail!("Apify run {} ended with status '{}'", run_id, terminal);
-    }
-
-    // Fetch dataset items
-    let items_url = format!(
-        "https://api.apify.com/v2/datasets/{}/items?format=json",
-        dataset_id
-    );
-    let items_resp = client
-        .get(&items_url)
-        .bearer_auth(cfg.token)
-        .send()
-        .context("Apify dataset fetch failed")?;
-
-    let items_text = items_resp.text().unwrap_or_default();
-    let items: Value =
-        serde_json::from_str(&items_text).context("Failed to parse Apify dataset items")?;
-    Ok(items)
+    Ok(text)
 }
 
-/// Poll the run status endpoint every `interval_secs` up to `max_polls` times.
-/// Returns the terminal status string ("SUCCEEDED", "FAILED", "ABORTED", …).
-fn poll_run_until_done(
-    client: &reqwest::blocking::Client,
-    token: &str,
-    run_url: &str,
-    max_polls: u32,
-    interval_secs: u64,
-) -> anyhow::Result<String> {
-    for _ in 0..max_polls {
-        let resp = client
-            .get(run_url)
-            .bearer_auth(token)
-            .send()
-            .context("Apify run status poll failed")?;
-        let text = resp.text().unwrap_or_default();
-        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        let s = v
-            .pointer("/data/status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("UNKNOWN")
-            .to_string();
-        match s.as_str() {
-            "SUCCEEDED" | "FAILED" | "ABORTED" | "TIMED-OUT" => return Ok(s),
-            _ => std::thread::sleep(std::time::Duration::from_secs(interval_secs)),
-        }
-    }
-    anyhow::bail!("Apify run did not reach a terminal state within the polling window")
+fn should_use_cache_for_unrecognized_marginlab(health: &Value) -> bool {
+    health["status"] == "unknown"
+        && health["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no clear degradation status"))
 }
 
-fn build_input(url: Option<&str>) -> Value {
-    match url {
-        Some(u) => json!({
-            "startUrls": [{ "url": u }],
-            "maxCrawlPages": 1,
-            "crawlerType": "playwright:firefox"
-        }),
-        None => json!({ "maxCrawlPages": 1 }),
-    }
-}
-
-/// Returns the default marginlab tracker URL for a known provider.
-/// Used when --apify-input-url is not explicitly set.
+/// Returns the default Marginlab tracker URL for a known provider.
 pub fn default_tracker_url(provider: &str) -> Option<&'static str> {
     match provider {
         "claude-code" => Some("https://marginlab.ai/trackers/claude-code/"),
-        "codex"       => Some("https://marginlab.ai/trackers/codex/"),
-        _             => None,
+        "codex" => Some("https://marginlab.ai/trackers/codex/"),
+        _ => None,
     }
 }
 
-/// Best-effort normalization of an Apify response into our provider-health shape.
-/// Handles both structured (provider/status fields) and scraped (text/markdown/html) outputs.
-fn normalize_apify_response(raw: &Value, provider: &str, source: &str, input_url: Option<&str>) -> Value {
-    // Flatten array to first item
-    let item = match raw {
-        Value::Array(arr) => arr.first().cloned().unwrap_or(Value::Null),
-        other => other.clone(),
-    };
+fn normalize_marginlab_response(body: &str, provider: &str, source_url: &str) -> Value {
+    let normalized = normalize_whitespace(body);
+    let lower = normalized.to_lowercase();
+    let status_window = marginlab_status_window(&lower);
 
-    // ── Try structured fields first ──────────────────────────────────────────
-    let explicit_status = item.get("status").and_then(|v| v.as_str());
-    let explicit_confidence = item.get("confidence").and_then(|v| v.as_f64());
-    let explicit_reason = item.get("reason").and_then(|v| v.as_str());
-    let explicit_source_url = item.get("source_url")
-        .or_else(|| item.get("url"))
-        .and_then(|v| v.as_str());
-    let explicit_observed_at = item.get("observed_at").and_then(|v| v.as_str());
-
-    // ── Collect all text content recursively ─────────────────────────────────
-    let mut text_parts: Vec<String> = Vec::new();
-    collect_text(&item, &mut text_parts);
-    let combined = text_parts.join(" ").to_lowercase();
-
-    // ── Infer provider ───────────────────────────────────────────────────────
-    let inferred_provider = if combined.contains("claude code") || combined.contains("claude-code") {
-        "claude-code"
-    } else if combined.contains("codex") {
-        "codex"
+    let (status, confidence, reason) = if status_window.contains("collecting baseline data")
+        || status_window.contains("degradation detection paused")
+    {
+        (
+            "unknown",
+            0.0,
+            "Marginlab tracker reports baseline collection is active and degradation detection is paused.",
+        )
+    } else if status_window.contains("degraded") {
+        (
+            "degraded",
+            0.75,
+            "Marginlab tracker reported Degraded for provider degradation status.",
+        )
+    } else if status_window.contains("nominal") {
+        (
+            "nominal",
+            0.75,
+            "Marginlab tracker reported Nominal for provider degradation status.",
+        )
     } else {
-        provider
+        (
+            "unknown",
+            0.0,
+            "Marginlab tracker was fetched, but no clear degradation status was found.",
+        )
     };
-
-    // ── Infer status ─────────────────────────────────────────────────────────
-    // Check the page header (first 300 chars) first — status pages put current
-    // status at the top. Only fall back to full-text if header is ambiguous.
-    let header = if combined.len() > 500 { &combined[..500] } else { combined.as_str() };
-
-    const DEGRADED_SIGNALS: &[&str] = &[
-        "degraded", "degradation", "regression", "failing", "failure",
-        "down", "outage", "unhealthy", "high latency", "latency spike",
-        "worse", " red ", "incident", "elevated error",
-    ];
-    const NOMINAL_SIGNALS: &[&str] = &[
-        "nominal", "healthy", "stable", " green ", "operational", "normal",
-        "all systems", "return to normal", "resolved", "collecting baseline data",
-    ];
-    // Phrases that contain a degraded keyword but mean the opposite
-    const NEGATIONS: &[&str] = &[
-        "not degraded", "no degradation", "not failing", "not down",
-        "degradation detection paused", "degradation detection",
-        "resuming statistical degradation", "before resuming",
-    ];
-
-    let (status, confidence, reason) = if let Some(s) = explicit_status {
-        // Structured status wins
-        let c = explicit_confidence.unwrap_or(if s == "degraded" { 0.70 } else if s == "nominal" { 0.65 } else { 0.0 });
-        let r = explicit_reason.unwrap_or("Apify response received but no explicit status field was found.").to_string();
-        (s.to_string(), c, r)
-    } else {
-        // Check header first; if ambiguous, check full text.
-        let negated = NEGATIONS.iter().any(|n| combined.contains(n));
-        let header_nominal = NOMINAL_SIGNALS.iter().any(|s| header.contains(s));
-        let header_degraded = !negated && DEGRADED_SIGNALS.iter().any(|s| header.contains(s));
-        let has_degraded = !negated && !header_nominal && (header_degraded || DEGRADED_SIGNALS.iter().any(|s| combined.contains(s)));
-        let has_nominal = header_nominal || NOMINAL_SIGNALS.iter().any(|s| combined.contains(s));
-
-        if has_degraded {
-            (
-                "degraded".into(),
-                0.70,
-                "Apify response text contained degraded/latency signals from the provider tracker.".into(),
-            )
-        } else if has_nominal {
-            (
-                "nominal".into(),
-                0.65,
-                "Apify response text contained healthy/operational signals from the provider tracker.".into(),
-            )
-        } else {
-            (
-                "unknown".into(),
-                0.0,
-                "Apify response was received, but no clear provider-health signal was found.".into(),
-            )
-        }
-    };
-
-    let source_url = explicit_source_url
-        .or(input_url)
-        .map(|s| json!(s))
-        .unwrap_or(Value::Null);
-
-    let observed_at = explicit_observed_at
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
     json!({
-        "provider": inferred_provider,
+        "provider": provider,
         "status": status,
         "confidence": confidence,
         "reason": reason,
-        "source": source,
+        "source": "marginlab",
         "source_url": source_url,
-        "observed_at": observed_at,
+        "observed_at": chrono::Utc::now().to_rfc3339(),
     })
 }
 
-/// Recursively collect string values from known content fields.
-fn collect_text(val: &Value, out: &mut Vec<String>) {
-    const TEXT_FIELDS: &[&str] = &[
-        "text", "markdown", "html", "content", "body", "title", "description",
-        "pageFunctionResult", "items", "datasetItems", "defaultDatasetItems",
-    ];
-    match val {
-        Value::Object(map) => {
-            for (k, v) in map {
-                if TEXT_FIELDS.contains(&k.as_str()) {
-                    if let Some(s) = v.as_str() {
-                        out.push(s.to_string());
-                    } else {
-                        collect_text(v, out);
-                    }
-                } else {
-                    collect_text(v, out);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                collect_text(item, out);
-            }
-        }
-        Value::String(s) => out.push(s.clone()),
-        _ => {}
-    }
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn marginlab_status_window(lower: &str) -> &str {
+    let start = lower
+        .find("degradation status")
+        .or_else(|| lower.find("status"))
+        .unwrap_or(0);
+    let tail = &lower[start..];
+    let end = tail
+        .find("baseline pass rate")
+        .or_else(|| tail.find("today's pass rate"))
+        .unwrap_or(tail.len().min(1_200));
+    &tail[..end]
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -378,15 +200,15 @@ fn collect_text(val: &Value, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use tempfile::TempDir;
 
     #[test]
     fn test_provider_health_file_loading() {
-        let path = Path::new("examples/provider-health/degraded.apify.cached.json");
+        let path = Path::new("examples/provider-health/degraded.marginlab.cached.json");
         let health = load_provider_health("file", Some(path)).unwrap();
         assert_eq!(health["provider"].as_str(), Some("claude-code"));
         assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(health["reason"].as_str().unwrap().contains("Cached Apify fallback"));
+        assert!(health["reason"].as_str().unwrap().contains("Cached Marginlab fallback"));
     }
 
     #[test]
@@ -404,126 +226,110 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_apify_response_array() {
-        let raw = json!([{
-            "status": "degraded",
-            "confidence": 0.8,
-            "reason": "High latency",
-            "source_url": "https://example.com",
-            "observed_at": "2024-01-01T00:00:00Z"
-        }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_eq!(h["provider"], "claude-code");
-        assert_eq!(h["status"], "degraded");
-        assert_eq!(h["confidence"], 0.8);
-        assert_eq!(h["source"], "apify");
-        assert_eq!(h["source_url"], "https://example.com");
-    }
+    fn test_normalize_marginlab_nominal_tracker_text() {
+        let body = "Codex gpt-5.5-xhigh Performance Tracker\n\
+Last updated: May 30, 2026\n\
+Status\n\
+Degradation Status\n\
+Shows if any time period has a statistically significant performance drop (p < 0.05).\n\
+Nominal\n\
+Baseline\n\
+Baseline Pass Rate\n\
+56 %";
 
-    #[test]
-    fn test_normalize_apify_response_missing_fields() {
-        let raw = json!([{}]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_eq!(h["status"], "unknown");
-        assert!(h["reason"].as_str().unwrap().contains("no clear provider-health signal"));
-    }
+        let h = normalize_marginlab_response(body, "codex", "https://marginlab.ai/trackers/codex/");
 
-    #[test]
-    fn test_normalize_apify_scraped_degraded_text() {
-        // Scraped page content with degraded signal in markdown field
-        let raw = json!([{
-            "markdown": "Claude Code tracker: high latency detected on coding endpoints.",
-            "url": "https://marginlab.ai/trackers/claude-code/"
-        }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_eq!(h["provider"], "claude-code");
-        assert_eq!(h["status"], "degraded");
-        assert!(h["confidence"].as_f64().unwrap() > 0.0);
-        assert_eq!(h["source"], "apify");
-    }
-
-    #[test]
-    fn test_normalize_apify_scraped_nominal_text() {
-        let raw = json!([{ "text": "Claude Code is operational and stable today." }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
+        assert_eq!(h["provider"], "codex");
         assert_eq!(h["status"], "nominal");
+        assert_eq!(h["source"], "marginlab");
+        assert_eq!(h["source_url"], "https://marginlab.ai/trackers/codex/");
+        assert!(h["reason"].as_str().unwrap().contains("reported Nominal"));
     }
 
     #[test]
-    fn test_normalize_apify_collecting_baseline_is_nominal() {
-        // marginlab.ai shows "Collecting baseline data" for new models — treat as healthy
-        let raw = json!([{ "text": "Claude Code Opus 4.8 Performance Tracker\nCollecting baseline data" }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_eq!(h["status"], "nominal", "collecting baseline data should be nominal");
+    fn test_normalize_marginlab_degraded_tracker_text() {
+        let body = "Claude Code Performance Tracker\n\
+Status\n\
+Degradation Status\n\
+Shows if any time period has a statistically significant performance drop (p < 0.05).\n\
+Degraded\n\
+Change Overview\n\
+Regression\n\
+30D Last Month";
+
+        let h = normalize_marginlab_response(
+            body,
+            "claude-code",
+            "https://marginlab.ai/trackers/claude-code/",
+        );
+
+        assert_eq!(h["provider"], "claude-code");
+        assert_eq!(h["status"], "degraded");
+        assert_eq!(h["source"], "marginlab");
+        assert!(h["confidence"].as_f64().unwrap() > 0.0);
     }
 
     #[test]
-    fn test_normalize_apify_negation_not_degraded() {
-        let raw = json!([{ "text": "Claude Code is not degraded. All systems normal." }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_ne!(h["status"], "degraded");
-    }
+    fn test_normalize_marginlab_collecting_baseline_is_unknown() {
+        let body = "Claude Code Opus 4.8 Performance Tracker\n\
+We are collecting a fresh Opus 4.8 baseline on SWE tasks before resuming statistical degradation detection.\n\
+New model — collecting baseline data. Degradation detection paused.\n\
+Status\n\
+Collecting baseline data\n\
+Baseline\n\
+Collecting...";
 
-    #[test]
-    fn test_normalize_apify_marginlab_collecting_baseline() {
-        // Real marginlab.ai text when a new model is being baselined
-        let raw = json!([{ "text": "Claude Code Opus 4.8 Performance Tracker\nWe are collecting a fresh Opus 4.8 baseline on SWE tasks before resuming statistical degradation detection.\nNew model — collecting baseline data. Degradation detection paused.\nStatus\nCollecting baseline data" }]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
-        assert_eq!(h["status"], "nominal",
-            "marginlab 'collecting baseline data / degradation detection paused' should be nominal, got: {}",
-            h["status"]);
-    }
+        let h = normalize_marginlab_response(
+            body,
+            "claude-code",
+            "https://marginlab.ai/trackers/claude-code/",
+        );
 
-    #[test]
-    fn test_apify_cache_fallback_no_token() {
-        let cache_path = Path::new("examples/provider-health/degraded.apify.cached.json");
-        let cfg = ApifyConfig {
-            token: "",
-            actor_id: None,
-            task_id: None,
-            input_url: None,
-            provider: "claude-code",
-        };
-        let (health, _raw, warnings) = load_provider_health_apify(&cfg, Some(cache_path));
-        assert_eq!(health["source"].as_str(), Some("cached-apify"));
-        assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(warnings.iter().any(|w| w.contains("APIFY_API_TOKEN not set")));
-    }
-
-    #[test]
-    fn test_apify_no_token_no_cache_returns_unknown() {
-        let cfg = ApifyConfig {
-            token: "",
-            actor_id: None,
-            task_id: None,
-            input_url: None,
-            provider: "claude-code",
-        };
-        let (health, _raw, warnings) = load_provider_health_apify(&cfg, None);
-        assert_eq!(health["status"].as_str(), Some("unknown"));
-        assert!(warnings.iter().any(|w| w.contains("unknown")));
-    }
-
-    #[test]
-    fn test_apify_unknown_live_falls_back_to_cache() {
-        // Simulate a live response that normalizes to unknown (empty object)
-        // by calling normalize directly, then verify the fallback logic
-        let raw = json!([{}]);
-        let h = normalize_apify_response(&raw, "claude-code", "apify", None);
         assert_eq!(h["status"], "unknown");
-        // The cache fallback for unknown-live is tested via load_provider_health_apify
-        // with no token (which skips live and goes to cache) — already covered above.
+        assert_eq!(h["confidence"], 0.0);
+        assert!(h["reason"].as_str().unwrap().contains("paused"));
     }
 
     #[test]
-    fn test_file_mode_does_not_use_apify_token() {
-        let path = Path::new("examples/provider-health/degraded.apify.cached.json");
-        let result = load_provider_health("file", Some(path));
-        assert!(result.is_ok());
+    fn test_marginlab_fetch_failure_uses_cache() {
+        let dir = TempDir::new().unwrap();
+        let cache_path = dir.path().join("cached.json");
+        fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&json!({
+                "provider": "claude-code",
+                "status": "degraded",
+                "confidence": 0.74,
+                "reason": "Cached Marginlab fallback for test.",
+                "source": "fixture",
+                "source_url": "https://marginlab.ai/trackers/claude-code/",
+                "observed_at": "2026-06-01T00:00:00Z"
+            })).unwrap(),
+        ).unwrap();
+
+        let cfg = MarginlabConfig {
+            provider: "claude-code",
+            tracker_url: "not-a-valid-url",
+        };
+        let (health, raw, warnings) = load_provider_health_marginlab(&cfg, Some(&cache_path));
+
+        assert!(raw.is_none());
+        assert_eq!(health["source"].as_str(), Some("cached-marginlab"));
+        assert_eq!(health["status"].as_str(), Some("degraded"));
+        assert!(warnings.iter().any(|w| w.contains("Marginlab live fetch failed")));
     }
 
     #[test]
-    fn test_apify_cache_fallback() {
-        test_apify_cache_fallback_no_token();
+    fn test_marginlab_fetch_failure_without_cache_returns_unknown() {
+        let cfg = MarginlabConfig {
+            provider: "claude-code",
+            tracker_url: "not-a-valid-url",
+        };
+        let (health, raw, warnings) = load_provider_health_marginlab(&cfg, None);
+
+        assert!(raw.is_none());
+        assert_eq!(health["status"].as_str(), Some("unknown"));
+        assert_eq!(health["source"].as_str(), Some("marginlab"));
+        assert!(warnings.iter().any(|w| w.contains("unknown")));
     }
 }

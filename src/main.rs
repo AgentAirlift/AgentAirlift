@@ -24,16 +24,13 @@ fn main() -> anyhow::Result<()> {
             targets,
             provider_health,
             provider_health_file,
-            apify_actor_id,
-            apify_task_id,
-            apify_input_url,
-            apify_cache_file,
+            provider_health_cache_file,
             skip_native_install,
             native_home,
         } => run_migration(
             session, project, out, source, targets,
             provider_health, provider_health_file,
-            apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
+            provider_health_cache_file,
             skip_native_install, native_home,
         ),
         cli::Commands::Health {
@@ -41,13 +38,9 @@ fn main() -> anyhow::Result<()> {
             out,
             provider_health,
             provider_health_file,
-            apify_actor_id,
-            apify_task_id,
-            apify_input_url,
-            apify_cache_file,
+            provider_health_cache_file,
         } => run_health(
-            source, out, provider_health, provider_health_file,
-            apify_actor_id, apify_task_id, apify_input_url, apify_cache_file,
+            source, out, provider_health, provider_health_file, provider_health_cache_file,
         ),
     }
 }
@@ -60,10 +53,7 @@ fn run_migration(
     targets: Vec<String>,
     provider_health: String,
     provider_health_file: Option<String>,
-    apify_actor_id: Option<String>,
-    apify_task_id: Option<String>,
-    apify_input_url: Option<String>,
-    apify_cache_file: Option<String>,
+    provider_health_cache_file: Option<String>,
     skip_native_install: bool,
     native_home: Option<String>,
 ) -> anyhow::Result<()> {
@@ -103,27 +93,21 @@ fn run_migration(
     
     // 3. Load provider health
     println!("🏥 Loading provider health...");
-    let (provider_health_data, apify_warnings) = if provider_health == "apify" {
-        // Only read token when apify mode is explicitly requested
-        let token = std::env::var("APIFY_API_TOKEN").unwrap_or_default();
-        let actor_id_env = std::env::var("APIFY_ACTOR_ID").ok();
-        let task_id_env = std::env::var("APIFY_TASK_ID").ok();
-        let cfg = provider_health::ApifyConfig {
-            token: &token,
-            actor_id: apify_actor_id.as_deref().or(actor_id_env.as_deref()),
-            task_id: apify_task_id.as_deref().or(task_id_env.as_deref()),
-            input_url: apify_input_url.as_deref()
-                .or_else(|| provider_health::default_tracker_url(&config.source_provider)),
+    let (provider_health_data, health_warnings) = if provider_health == "marginlab" {
+        let tracker_url = provider_health::default_tracker_url(&config.source_provider)
+            .ok_or_else(|| anyhow::anyhow!(
+                "No default Marginlab tracker URL for provider '{}'",
+                config.source_provider
+            ))?;
+        let cfg = provider_health::MarginlabConfig {
             provider: &config.source_provider,
+            tracker_url,
         };
-        let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
-        let (health, raw_apify, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
-        // Save raw Apify response if we got one
-        if let Some(ref raw) = raw_apify {
-            fs_util::write_json_pretty(
-                &config.output_dir.join("raw/apify-response.json"),
-                raw,
-            )?;
+        let cache_path = provider_health_cache_file.as_deref().map(std::path::Path::new);
+        let (health, raw_marginlab, warnings) =
+            provider_health::load_provider_health_marginlab(&cfg, cache_path);
+        if let Some(ref raw) = raw_marginlab {
+            fs::write(config.output_dir.join("raw/marginlab-response.html"), raw)?;
         }
         (health, warnings)
     } else {
@@ -197,7 +181,7 @@ fn run_migration(
     
     // 8. Create audit reports
     println!("📊 Creating audit reports...");
-    diagnostics.warnings.extend(apify_warnings);
+    diagnostics.warnings.extend(health_warnings);
     audit::create_audit_report(
         &canonical_turns,
         &diagnostics,
@@ -222,25 +206,21 @@ fn run_health(
     out: String,
     provider_health: String,
     provider_health_file: Option<String>,
-    apify_actor_id: Option<String>,
-    apify_task_id: Option<String>,
-    apify_input_url: Option<String>,
-    apify_cache_file: Option<String>,
+    provider_health_cache_file: Option<String>,
 ) -> anyhow::Result<()> {
-    let (health, warnings) = if provider_health == "apify" {
-        let token = std::env::var("APIFY_API_TOKEN").unwrap_or_default();
-        let actor_id_env = std::env::var("APIFY_ACTOR_ID").ok();
-        let task_id_env = std::env::var("APIFY_TASK_ID").ok();
-        let cfg = provider_health::ApifyConfig {
-            token: &token,
-            actor_id: apify_actor_id.as_deref().or(actor_id_env.as_deref()),
-            task_id: apify_task_id.as_deref().or(task_id_env.as_deref()),
-            input_url: apify_input_url.as_deref()
-                .or_else(|| provider_health::default_tracker_url(&source)),
+    let (health, warnings) = if provider_health == "marginlab" {
+        let tracker_url = provider_health::default_tracker_url(&source)
+            .ok_or_else(|| anyhow::anyhow!(
+                "No default Marginlab tracker URL for provider '{}'",
+                source
+            ))?;
+        let cfg = provider_health::MarginlabConfig {
             provider: &source,
+            tracker_url,
         };
-        let cache_path = apify_cache_file.as_deref().map(std::path::Path::new);
-        let (health, _raw, warnings) = provider_health::load_provider_health_apify(&cfg, cache_path);
+        let cache_path = provider_health_cache_file.as_deref().map(std::path::Path::new);
+        let (health, _raw, warnings) =
+            provider_health::load_provider_health_marginlab(&cfg, cache_path);
         (health, warnings)
     } else {
         let file_path = provider_health_file.as_deref().map(std::path::Path::new);

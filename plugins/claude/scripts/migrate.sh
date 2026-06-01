@@ -6,7 +6,7 @@ set -euo pipefail
 
 BIN="${AGENT_AIRLIFT_BIN:-agent-airlift}"
 TARGET="${1:-codex}"
-CACHE="${AIRLIFT_HEALTH_CACHE:-examples/provider-health/degraded.apify.cached.json}"
+CACHE="${AIRLIFT_HEALTH_CACHE:-examples/provider-health/degraded.marginlab.cached.json}"
 OUT="${AIRLIFT_OUT:-./airlift-out}"
 
 # Claude Code stores sessions under ~/.claude/projects/<cwd with '/' -> '-'>/

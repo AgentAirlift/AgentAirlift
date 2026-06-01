@@ -41,21 +41,9 @@ pub enum Commands {
         #[arg(long)]
         provider_health_file: Option<String>,
 
-        /// Apify actor ID (overrides APIFY_ACTOR_ID env var)
+        /// Fallback cache file if live provider-health fetch fails
         #[arg(long)]
-        apify_actor_id: Option<String>,
-
-        /// Apify task ID (overrides APIFY_TASK_ID env var)
-        #[arg(long)]
-        apify_task_id: Option<String>,
-
-        /// URL to pass as input to the Apify actor/task
-        #[arg(long)]
-        apify_input_url: Option<String>,
-
-        /// Fallback cache file if Apify live call fails
-        #[arg(long)]
-        apify_cache_file: Option<String>,
+        provider_health_cache_file: Option<String>,
 
         /// Skip installing native resume-compatible sessions into ~/.codex / ~/.claude
         #[arg(long, default_value_t = false)]
@@ -77,28 +65,16 @@ pub enum Commands {
         out: String,
 
         /// Provider health source type
-        #[arg(long, default_value = "apify")]
+        #[arg(long, default_value = "marginlab")]
         provider_health: String,
 
         /// Path to provider health file (if using file source)
         #[arg(long)]
         provider_health_file: Option<String>,
 
-        /// Apify actor ID (overrides APIFY_ACTOR_ID env var)
+        /// Fallback cache file if live provider-health fetch fails
         #[arg(long)]
-        apify_actor_id: Option<String>,
-
-        /// Apify task ID (overrides APIFY_TASK_ID env var)
-        #[arg(long)]
-        apify_task_id: Option<String>,
-
-        /// URL to pass as input to the Apify actor/task
-        #[arg(long)]
-        apify_input_url: Option<String>,
-
-        /// Fallback cache file if Apify live call fails
-        #[arg(long)]
-        apify_cache_file: Option<String>,
+        provider_health_cache_file: Option<String>,
     },
 }
 
@@ -141,5 +117,36 @@ mod tests {
         assert!(!help.contains("box-upload"));
         assert!(!help.contains("box-dry-run"));
         assert!(!help.contains("box-parent-folder-id"));
+    }
+
+    #[test]
+    fn health_rejects_apify_flags() {
+        let result = Cli::try_parse_from([
+            "agent-airlift",
+            "health",
+            "--source",
+            "claude-code",
+            "--apify-cache-file",
+            "examples/provider-health/degraded.apify.cached.json",
+        ]);
+
+        assert!(result.is_err(), "Apify flags should not be accepted");
+    }
+
+    #[test]
+    fn health_defaults_to_marginlab_and_does_not_advertise_apify_flags() {
+        let mut help = Vec::new();
+        Cli::command()
+            .find_subcommand_mut("health")
+            .expect("health subcommand exists")
+            .write_long_help(&mut help)
+            .expect("help renders");
+        let help = String::from_utf8(help).expect("help is utf8");
+
+        assert!(help.contains("[default: marginlab]"));
+        assert!(!help.contains("apify-actor-id"));
+        assert!(!help.contains("apify-task-id"));
+        assert!(!help.contains("apify-input-url"));
+        assert!(!help.contains("apify-cache-file"));
     }
 }

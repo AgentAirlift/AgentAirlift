@@ -2,8 +2,8 @@
 
 Adds two slash commands to Claude Code:
 
-- `/airlift-check` — refresh the `claude-code` provider-health signal (Apify, with
-  cached fallback). If degraded, recommends airlifting to Codex.
+- `/airlift-check` — refresh the `claude-code` provider-health signal directly
+  from Marginlab, with cached fallback. If degraded, recommends airlifting to Codex.
 - `/airlift-migrate` — run the Agent Airlift migration pipeline on the current
   session and produce a Codex-ready handoff bundle.
 
@@ -35,13 +35,13 @@ Then use `/airlift-check` and `/airlift-migrate`.
 |-----|---------|---------|
 | `AGENT_AIRLIFT_BIN` | `agent-airlift` | Path to the CLI binary |
 | `AIRLIFT_OUT` | `./airlift-out` | Output directory |
-| `AIRLIFT_HEALTH_CACHE` | `examples/provider-health/degraded.apify.cached.json` | Cached signal used as fallback / migration signal |
+| `AIRLIFT_HEALTH_CACHE` | `examples/provider-health/degraded.marginlab.cached.json` | Cached signal used as fallback / migration signal |
 
 ## Demo note
 
-To reliably show degradation, leave `APIFY_API_TOKEN` unset so the health check
-falls back to the cached degraded signal. With a token set, the live tracker is
-queried and the result reflects whatever it currently reports.
+The health check queries Marginlab directly and reports whatever the live
+tracker currently reports. If Marginlab cannot be reached, the script falls back
+to the checked-in cached degraded signal.
 
 ## Session detection
 

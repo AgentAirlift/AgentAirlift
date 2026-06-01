@@ -3,8 +3,8 @@
 A local, deterministic CLI that performs a **manual transfer** of an AI coding
 session from one agent to another (e.g. Claude Code → Codex / Kiro / OpenCode).
 It imports a session, normalizes it to a canonical schema, and emits handoff
-docs plus readable, target-shaped exports. Optional Apify provider-health signal
-ingestion is supported but never required.
+docs plus readable, target-shaped exports. Optional direct Marginlab
+provider-health signal ingestion is supported but never required.
 
 > Scope note: The core CLI is deterministic and calls **no AI APIs** during
 > generation. Transfers are always **explicit**. Optional Claude Code / Codex
@@ -27,7 +27,7 @@ cargo run -- demo \
 Output is written under `airlift-out/`:
 
 ```
-raw/         source session copy, repo snapshot, provider-health, apify-response
+raw/         source session copy, repo snapshot, provider-health, marginlab-response
 normalized/  canonical-session.json (deterministic schema)
 replay/      agent-airlift.session.jsonl
 exports/     HANDOFF.md, AGENTS.md, codex/kiro/opencode exports, .kiro specs
@@ -41,10 +41,10 @@ subcommand runs only the provider-health step and persists
 
 ```bash
 cargo run -- health --source claude-code \
-  --provider-health apify \
-  --apify-cache-file examples/provider-health/degraded.apify.cached.json
+  --provider-health marginlab \
+  --provider-health-cache-file examples/provider-health/degraded.marginlab.cached.json
 # prints the normalized signal + a line:
-# AIRLIFT_HEALTH status=degraded provider=claude-code confidence=0.74 source=cached-apify
+# AIRLIFT_HEALTH status=degraded provider=claude-code confidence=0.74 source=cached-marginlab
 ```
 
 ## Supported import formats
@@ -81,18 +81,16 @@ session in the target tool.
 
 ```bash
 # file mode (no network, no token)
---provider-health file --provider-health-file examples/provider-health/degraded.apify.cached.json
+--provider-health file --provider-health-file examples/provider-health/degraded.marginlab.cached.json
 
-# apify mode: scrapes the live tracker; falls back to cache if token missing or run fails
-# "Collecting baseline data" on the tracker page is treated as nominal (healthy)
---provider-health apify \
-  --apify-actor-id apify~website-content-crawler \
-  --apify-input-url https://marginlab.ai/trackers/claude-code/ \
-  --apify-cache-file examples/provider-health/degraded.apify.cached.json
+# marginlab mode: fetches the live tracker directly; falls back to cache if fetch fails
+# "Collecting baseline data" is treated as unknown because degradation detection is paused
+--provider-health marginlab \
+  --provider-health-cache-file examples/provider-health/degraded.marginlab.cached.json
 ```
 
 Generated docs distinguish the signal source from the evaluated provider, e.g.
-*"Provider health signal from `cached-apify`: `claude-code` is degraded."*
+*"Provider health signal from `cached-marginlab`: `claude-code` is degraded."*
 
 ## Plugins (optional)
 

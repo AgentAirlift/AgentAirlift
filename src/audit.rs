@@ -172,13 +172,11 @@ mod tests {
 
     #[test]
     fn test_audit_artifacts_contain_no_token_strings() {
-        // Include the real informational warning that mentions the env-var NAME —
-        // that is legitimate and must NOT be flagged as a leaked secret.
         let turns = vec![sample_turn("t1", "user", "normal request content")];
         let diag = ImportDiagnostics {
             source_path: "examples/sessions/x.jsonl".into(),
             detected_format: "flat".into(),
-            warnings: vec!["APIFY_API_TOKEN not set; skipping live Apify call.".into()],
+            warnings: vec!["Marginlab live fetch failed: connection refused.".into()],
             ..Default::default()
         };
         let dir = TempDir::new().unwrap();
@@ -192,8 +190,7 @@ mod tests {
 
     #[test]
     fn test_secret_guard_distinguishes_value_from_var_name() {
-        // Mentioning the variable name is fine.
-        assert!(!looks_like_secret("APIFY_API_TOKEN not set; skipping live Apify call."));
+        assert!(!looks_like_secret("Marginlab live fetch failed: connection refused."));
         // Actual leaked values are caught.
         assert!(looks_like_secret("Authorization: Bearer eyJhbGciOiJIUzI1Ni) leaked"));
         assert!(looks_like_secret("{\"token\":\"abcd1234efgh5678\"}"));

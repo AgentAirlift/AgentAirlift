@@ -6,7 +6,7 @@ set -euo pipefail
 
 BIN="${AGENT_AIRLIFT_BIN:-agent-airlift}"
 TARGET="${1:-claude-code}"
-CACHE="${AIRLIFT_HEALTH_CACHE:-examples/provider-health/degraded.apify.cached.codex.json}"
+CACHE="${AIRLIFT_HEALTH_CACHE:-examples/provider-health/degraded.marginlab.cached.codex.json}"
 OUT="${AIRLIFT_OUT:-./airlift-out}"
 
 # Codex stores sessions under ~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl

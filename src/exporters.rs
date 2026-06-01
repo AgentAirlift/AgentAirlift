@@ -147,7 +147,7 @@ fn health_summary(health: Option<&Value>, evaluated_provider: &str) -> String {
     match health {
         None => "No provider health data available. Assume all providers operational.".into(),
         Some(h) => {
-            // `source` = signal origin (apify, cached-apify, file, mock)
+            // `source` = signal origin (marginlab, cached-marginlab, file, mock)
             // `provider` = evaluated provider (claude-code, etc.)
             let signal_source = h.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
             let provider      = h.get("provider").and_then(|v| v.as_str()).unwrap_or(evaluated_provider);
@@ -396,7 +396,7 @@ The session has been migrated to: {targets}.
 
 ## Constraints
 - Do not repeat work already listed in "Work Already Completed".
-- Do not call Apify APIs unless explicitly requested; existing artifacts already include the provider-health signal.
+- Do not call live provider-health endpoints unless explicitly requested; existing artifacts already include the provider-health signal.
 - Keep changes deterministic and local unless explicitly instructed otherwise.
 - Preserve unknown fields in any JSONL you read or write.
 
@@ -555,17 +555,17 @@ mod tests {
     fn test_health_summary_distinguishes_signal_source_from_evaluated_provider() {
         let health = json!({
             "provider": "claude-code",
-            "source": "apify",
+            "source": "marginlab",
             "status": "degraded",
             "reason": "High latency detected"
         });
         let summary = health_summary(Some(&health), "claude-code");
-        // Signal source (apify) and evaluated provider (claude-code) must both appear
-        assert!(summary.contains("apify"), "should mention signal source");
+        // Signal source (marginlab) and evaluated provider (claude-code) must both appear
+        assert!(summary.contains("marginlab"), "should mention signal source");
         assert!(summary.contains("claude-code"), "should mention evaluated provider");
         assert!(summary.contains("degraded"));
-        // Must NOT say "apify is degraded" — that conflates source with evaluated provider
-        assert!(!summary.contains("`apify` is"), "must not say apify is degraded");
+        // Must NOT say "marginlab is degraded" — that conflates source with evaluated provider
+        assert!(!summary.contains("`marginlab` is"), "must not say marginlab is degraded");
     }
 
     #[test]
