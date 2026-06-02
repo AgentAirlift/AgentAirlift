@@ -12,7 +12,6 @@ that shell out to the `agent-airlift` binary.
 
 ## Prerequisites
 
-- Build the CLI: `cargo build --release` in the repo root.
 - Make the binary discoverable, either:
   - put it on `PATH`, or
   - export `AGENT_AIRLIFT_BIN=/abs/path/to/target/release/agent-airlift`.
@@ -21,13 +20,25 @@ that shell out to the `agent-airlift` binary.
 
 ## Install (dev)
 
-Load the plugin directory for a session:
+Install or replace the local Claude Code plugin from the repo root:
 
 ```bash
-claude --plugin-dir plugins/claude
+./scripts/agent-airlift install-claude
 ```
 
-Then use `/airlift-check` and `/airlift-migrate`.
+The installer runs `cargo build --release`, validates the Claude plugin,
+registers the repo-local marketplace, and force-refreshes
+`agent-airlift@agent-airlift-local` by uninstalling the existing local copy with
+`--keep-data` before installing it again.
+
+Useful options:
+
+```bash
+./scripts/agent-airlift install-claude --skip-build
+./scripts/agent-airlift install-all
+```
+
+Then restart Claude Code and use `/airlift-check` and `/airlift-migrate`.
 
 ## Configuration (env)
 

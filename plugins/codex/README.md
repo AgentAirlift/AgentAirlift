@@ -37,6 +37,7 @@ Useful options:
 ```bash
 ./scripts/agent-airlift install-codex --skip-build
 ./scripts/agent-airlift install-codex --codex-home /tmp/codex-home
+./scripts/agent-airlift install-all
 ```
 
 Then restart Codex and use `/airlift-check` and `/airlift-migrate`.

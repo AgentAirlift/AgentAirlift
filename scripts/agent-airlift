@@ -4,8 +4,12 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,6 +22,10 @@ SKILLS = {
     "airlift-check": ROOT / "plugins/codex/skills/airlift-check/SKILL.md",
     "airlift-migrate": ROOT / "plugins/codex/skills/airlift-migrate/SKILL.md",
 }
+
+CLAUDE_PLUGIN_ID = "agent-airlift@agent-airlift-local"
+CLAUDE_MARKETPLACE_DIR = ROOT / "plugins"
+CLAUDE_PLUGIN_DIR = ROOT / "plugins/claude"
 
 
 def backup_path(path: Path) -> Path:
@@ -76,17 +84,13 @@ def install_skill(codex_home: Path, name: str, source: Path) -> tuple[Path, Path
 
 def build_release(skip_build: bool) -> None:
     if skip_build:
-        print("Skipped cargo build (--skip-build).")
+        print("Skipped cargo build (--skip-build).", flush=True)
         return
 
     subprocess.run(["cargo", "build", "--release"], cwd=ROOT, check=True)
 
 
-def install_codex(args: argparse.Namespace) -> int:
-    codex_home = Path(args.codex_home).expanduser().resolve()
-
-    build_release(args.skip_build)
-
+def install_codex_files(codex_home: Path, print_restart: bool = True) -> None:
     installed_prompts = []
     installed_skills = []
     backups = []
@@ -116,7 +120,73 @@ def install_codex(args: argparse.Namespace) -> int:
         for path in backups:
             print(f"  - {path}")
 
-    print("Restart Codex to reload prompts and skills.")
+    if print_restart:
+        print("Restart Codex to reload prompts and skills.")
+
+
+def run_claude_command(args: list[str]) -> None:
+    subprocess.run(["claude", *args], cwd=ROOT, check=True)
+
+
+def uninstall_claude_plugin_if_present() -> None:
+    result = subprocess.run(
+        [
+            "claude",
+            "plugin",
+            "uninstall",
+            CLAUDE_PLUGIN_ID,
+            "--scope",
+            "user",
+            "--keep-data",
+            "-y",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return
+
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    if "not installed" in output or "not found" in output:
+        return
+
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        ["claude", "plugin", "uninstall", CLAUDE_PLUGIN_ID],
+    )
+
+
+def install_claude_plugin() -> None:
+    run_claude_command(["plugin", "validate", str(CLAUDE_PLUGIN_DIR)])
+    run_claude_command(["plugin", "marketplace", "add", str(CLAUDE_MARKETPLACE_DIR)])
+    uninstall_claude_plugin_if_present()
+    run_claude_command(["plugin", "install", CLAUDE_PLUGIN_ID, "--scope", "user"])
+    print(f"Installed Claude plugin: {CLAUDE_PLUGIN_ID}")
+
+
+def install_codex(args: argparse.Namespace) -> int:
+    codex_home = Path(args.codex_home).expanduser().resolve()
+    build_release(args.skip_build)
+    install_codex_files(codex_home)
+    return 0
+
+
+def install_claude(args: argparse.Namespace) -> int:
+    build_release(args.skip_build)
+    install_claude_plugin()
+    print("Restart Claude Code to reload the plugin.")
+    return 0
+
+
+def install_all(args: argparse.Namespace) -> int:
+    codex_home = Path(args.codex_home).expanduser().resolve()
+    build_release(args.skip_build)
+    install_codex_files(codex_home, print_restart=False)
+    install_claude_plugin()
+    print("Restart Codex and Claude Code to reload prompts, skills, and plugins.")
     return 0
 
 
@@ -139,6 +209,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip cargo build --release during installation.",
     )
     install.set_defaults(func=install_codex)
+
+    install_claude_parser = subparsers.add_parser(
+        "install-claude",
+        help="Install the Agent Airlift Claude Code plugin locally.",
+    )
+    install_claude_parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip cargo build --release during installation.",
+    )
+    install_claude_parser.set_defaults(func=install_claude)
+
+    install_all_parser = subparsers.add_parser(
+        "install-all",
+        help="Install the Agent Airlift local plugins for Codex and Claude Code.",
+    )
+    install_all_parser.add_argument(
+        "--codex-home",
+        default="~/.codex",
+        help="Codex home directory to install into (default: ~/.codex).",
+    )
+    install_all_parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip cargo build --release during installation.",
+    )
+    install_all_parser.set_defaults(func=install_all)
 
     return parser
 
