@@ -106,7 +106,12 @@ Pairing is cross-tool: the Claude plugin checks `claude-code` and airlifts to
 `codex`; the Codex plugin checks `codex` and airlifts to `claude-code`. The
 plugins are thin front-ends that shell out to `agent-airlift health` / `migrate`
 — no new conversion logic. See [`plugins/SPEC.md`](plugins/SPEC.md) and each
-plugin's README for install and configuration.
+plugin's README for install and configuration. For Codex local development,
+refresh the installed prompts and skills with:
+
+```bash
+./scripts/agent-airlift install-codex
+```
 
 ## Tests
 

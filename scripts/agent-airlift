@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+PROMPTS = {
+    "airlift-check.md": ROOT / "plugins/codex/prompts/airlift-check.md",
+    "airlift-migrate.md": ROOT / "plugins/codex/prompts/airlift-migrate.md",
+}
+
+SKILLS = {
+    "airlift-check": ROOT / "plugins/codex/skills/airlift-check/SKILL.md",
+    "airlift-migrate": ROOT / "plugins/codex/skills/airlift-migrate/SKILL.md",
+}
+
+
+def backup_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.bak")
+
+
+def remove_existing_backup(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def move_to_backup(path: Path) -> Path:
+    backup = backup_path(path)
+    remove_existing_backup(backup)
+    shutil.move(str(path), str(backup))
+    return backup
+
+
+def install_prompt(codex_home: Path, name: str, source: Path) -> tuple[Path, Path | None]:
+    destination = codex_home / "prompts" / name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = source.resolve()
+
+    if destination.is_symlink():
+        if destination.resolve() == source:
+            return destination, None
+        destination.unlink()
+    elif destination.exists():
+        backup = move_to_backup(destination)
+        destination.symlink_to(source)
+        return destination, backup
+
+    destination.symlink_to(source)
+    return destination, None
+
+
+def install_skill(codex_home: Path, name: str, source: Path) -> tuple[Path, Path | None]:
+    destination = codex_home / "skills" / name / "SKILL.md"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = source.resolve()
+
+    if destination.exists() or destination.is_symlink():
+        existing = destination.read_text() if destination.is_file() else None
+        incoming = source.read_text()
+        if existing == incoming:
+            return destination, None
+        backup = move_to_backup(destination)
+        shutil.copy2(source, destination)
+        return destination, backup
+
+    shutil.copy2(source, destination)
+    return destination, None
+
+
+def build_release(skip_build: bool) -> None:
+    if skip_build:
+        print("Skipped cargo build (--skip-build).")
+        return
+
+    subprocess.run(["cargo", "build", "--release"], cwd=ROOT, check=True)
+
+
+def install_codex(args: argparse.Namespace) -> int:
+    codex_home = Path(args.codex_home).expanduser().resolve()
+
+    build_release(args.skip_build)
+
+    installed_prompts = []
+    installed_skills = []
+    backups = []
+
+    for name, source in PROMPTS.items():
+        destination, backup = install_prompt(codex_home, name, source)
+        installed_prompts.append(destination)
+        if backup:
+            backups.append(backup)
+
+    for name, source in SKILLS.items():
+        destination, backup = install_skill(codex_home, name, source)
+        installed_skills.append(destination)
+        if backup:
+            backups.append(backup)
+
+    print(f"Installed Codex prompts under {codex_home / 'prompts'}:")
+    for path in installed_prompts:
+        print(f"  - {path}")
+
+    print(f"Installed Codex skills under {codex_home / 'skills'}:")
+    for path in installed_skills:
+        print(f"  - {path}")
+
+    if backups:
+        print("Backed up replaced files:")
+        for path in backups:
+            print(f"  - {path}")
+
+    print("Restart Codex to reload prompts and skills.")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent-airlift")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    install = subparsers.add_parser(
+        "install-codex",
+        help="Install the Agent Airlift Codex prompts and skills locally.",
+    )
+    install.add_argument(
+        "--codex-home",
+        default="~/.codex",
+        help="Codex home directory to install into (default: ~/.codex).",
+    )
+    install.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip cargo build --release during installation.",
+    )
+    install.set_defaults(func=install_codex)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

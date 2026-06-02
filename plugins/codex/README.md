@@ -13,7 +13,6 @@ output. The migration pipeline itself is unchanged.
 
 ## Prerequisites
 
-- Build the CLI: `cargo build --release` in the repo root.
 - Make the binary discoverable, either:
   - put it on `PATH`, or
   - export `AGENT_AIRLIFT_BIN=/abs/path/to/target/release/agent-airlift`.
@@ -22,16 +21,25 @@ output. The migration pipeline itself is unchanged.
 
 ## Install (dev)
 
-Codex discovers custom prompt slash commands from `~/.codex/prompts/`. Symlink or
-copy the prompts there:
+Install or replace the local Codex prompts and skills from the repo root:
 
 ```bash
-mkdir -p ~/.codex/prompts
-ln -sf "$(pwd)/plugins/codex/prompts/airlift-check.md"   ~/.codex/prompts/airlift-check.md
-ln -sf "$(pwd)/plugins/codex/prompts/airlift-migrate.md" ~/.codex/prompts/airlift-migrate.md
+./scripts/agent-airlift install-codex
 ```
 
-Then use `/airlift-check` and `/airlift-migrate` inside Codex.
+The installer runs `cargo build --release`, symlinks the prompt commands into
+`~/.codex/prompts/`, and copies the Codex skill templates into
+`~/.codex/skills/`. Existing non-symlink prompt files and changed skill files are
+backed up as `.bak` before replacement.
+
+Useful options:
+
+```bash
+./scripts/agent-airlift install-codex --skip-build
+./scripts/agent-airlift install-codex --codex-home /tmp/codex-home
+```
+
+Then restart Codex and use `/airlift-check` and `/airlift-migrate`.
 
 > Codex's packaged-plugin format is still firming up; prompt slash commands are
 > the stable mechanism used here. Packaging can move to Codex's plugin layout
