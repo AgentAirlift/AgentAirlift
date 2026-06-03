@@ -3,5 +3,10 @@
   "displayName": "Agent Airlift",
   "version": "0.1.0",
   "description": "Check Claude Code provider health and airlift the current session to Codex when degraded.",
+  "author": {
+    "name": "Dhruvil Shah",
+    "email": "week_falsity_8k@icloud.com",
+    "url": "https://www.linkedin.com/in/dhruvil009/"
+  },
   "keywords": ["agent-airlift", "handoff", "provider-health", "migration"]
 }
