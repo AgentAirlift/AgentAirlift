@@ -1,7 +1,10 @@
 use anyhow::Context;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+
+const MAX_MARGINLAB_RESPONSE_BYTES: usize = 512 * 1024;
 
 pub struct MarginlabConfig<'a> {
     /// Evaluated provider name from --source.
@@ -37,12 +40,16 @@ pub fn load_provider_health_marginlab(
             let health = normalize_marginlab_response(&body, cfg.provider, cfg.tracker_url);
             if should_use_cache_for_unrecognized_marginlab(&health) {
                 if let Some(path) = cache_file {
-                    if let Ok(cached) = load_cached_health(path, "cached-marginlab") {
-                        warnings.push(
-                            "Marginlab response was received but no clear status was found; \
-                             using cached provider-health fixture.".into(),
-                        );
-                        return (cached, Some(body), warnings);
+                    match load_cached_health(path, "cached-marginlab", cfg.provider) {
+                        Ok(cached) => {
+                            warnings.push(
+                                "Marginlab response was received but no clear status was found; \
+                                 using cached provider-health fixture."
+                                    .into(),
+                            );
+                            return (cached, Some(body), warnings);
+                        }
+                        Err(e) => warnings.push(format!("Cache file load failed: {}", e)),
                     }
                 }
             }
@@ -51,7 +58,7 @@ pub fn load_provider_health_marginlab(
         Err(e) => {
             warnings.push(format!("Marginlab live fetch failed: {}", e));
             if let Some(path) = cache_file {
-                match load_cached_health(path, "cached-marginlab") {
+                match load_cached_health(path, "cached-marginlab", cfg.provider) {
                     Ok(cached) => {
                         warnings.push(format!("Using cached provider health: {}", path.display()));
                         return (cached, None, warnings);
@@ -65,6 +72,10 @@ pub fn load_provider_health_marginlab(
     }
 }
 
+pub fn should_write_raw_marginlab() -> bool {
+    std::env::var("AIRLIFT_WRITE_RAW_MARGINLAB").as_deref() == Ok("1")
+}
+
 // ── private helpers ───────────────────────────────────────────────────────────
 
 fn load_from_file(file_path: Option<&Path>) -> anyhow::Result<Value> {
@@ -76,8 +87,18 @@ fn load_from_file(file_path: Option<&Path>) -> anyhow::Result<Value> {
         .with_context(|| format!("Invalid JSON in provider health file: {}", path.display()))
 }
 
-fn load_cached_health(path: &Path, source: &str) -> anyhow::Result<Value> {
+fn load_cached_health(path: &Path, source: &str, expected_provider: &str) -> anyhow::Result<Value> {
     let mut cached = load_from_file(Some(path))?;
+    let actual_provider = cached["provider"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("provider mismatch: cached health has no provider"))?;
+    if actual_provider != expected_provider {
+        anyhow::bail!(
+            "provider mismatch: cache is for '{}', but '{}' was requested",
+            actual_provider,
+            expected_provider
+        );
+    }
     if let Some(obj) = cached.as_object_mut() {
         obj.insert("source".into(), json!(source));
     }
@@ -107,7 +128,14 @@ fn fetch_marginlab(tracker_url: &str) -> anyhow::Result<String> {
         .send()
         .context("Marginlab tracker request failed")?;
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let mut limited = resp.take((MAX_MARGINLAB_RESPONSE_BYTES + 1) as u64);
+    let mut text = String::new();
+    limited
+        .read_to_string(&mut text)
+        .context("Failed to read Marginlab tracker response")?;
+    if text.len() > MAX_MARGINLAB_RESPONSE_BYTES {
+        truncate_to_char_boundary(&mut text, MAX_MARGINLAB_RESPONSE_BYTES);
+    }
     if !status.is_success() {
         anyhow::bail!(
             "Marginlab tracker fetch failed ({}): {}",
@@ -116,6 +144,14 @@ fn fetch_marginlab(tracker_url: &str) -> anyhow::Result<String> {
         );
     }
     Ok(text)
+}
+
+fn truncate_to_char_boundary(text: &mut String, max_len: usize) {
+    let mut end = max_len.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
 }
 
 fn should_use_cache_for_unrecognized_marginlab(health: &Value) -> bool {
@@ -208,7 +244,10 @@ mod tests {
         let health = load_provider_health("file", Some(path)).unwrap();
         assert_eq!(health["provider"].as_str(), Some("claude-code"));
         assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(health["reason"].as_str().unwrap().contains("Cached Marginlab fallback"));
+        assert!(health["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Cached Marginlab fallback"));
     }
 
     #[test]
@@ -222,7 +261,10 @@ mod tests {
     fn test_provider_health_invalid_source() {
         let result = load_provider_health("invalid", None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported provider health source"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported provider health source"));
     }
 
     #[test]
@@ -304,8 +346,10 @@ Collecting...";
                 "source": "fixture",
                 "source_url": "https://marginlab.ai/trackers/claude-code/",
                 "observed_at": "2026-06-01T00:00:00Z"
-            })).unwrap(),
-        ).unwrap();
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         let cfg = MarginlabConfig {
             provider: "claude-code",
@@ -316,7 +360,9 @@ Collecting...";
         assert!(raw.is_none());
         assert_eq!(health["source"].as_str(), Some("cached-marginlab"));
         assert_eq!(health["status"].as_str(), Some("degraded"));
-        assert!(warnings.iter().any(|w| w.contains("Marginlab live fetch failed")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("Marginlab live fetch failed")));
     }
 
     #[test]
@@ -331,5 +377,50 @@ Collecting...";
         assert_eq!(health["status"].as_str(), Some("unknown"));
         assert_eq!(health["source"].as_str(), Some("marginlab"));
         assert!(warnings.iter().any(|w| w.contains("unknown")));
+    }
+
+    #[test]
+    fn marginlab_cache_provider_mismatch_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let cache_path = dir.path().join("cached.json");
+        fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&json!({
+                "provider": "claude-code",
+                "status": "degraded",
+                "confidence": 0.74,
+                "reason": "Cached Marginlab fallback for test.",
+                "source": "fixture",
+                "source_url": "https://marginlab.ai/trackers/claude-code/",
+                "observed_at": "2026-06-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let cfg = MarginlabConfig {
+            provider: "codex",
+            tracker_url: "not-a-valid-url",
+        };
+        let (health, raw, warnings) = load_provider_health_marginlab(&cfg, Some(&cache_path));
+
+        assert!(raw.is_none());
+        assert_eq!(health["provider"].as_str(), Some("codex"));
+        assert_eq!(health["source"].as_str(), Some("marginlab"));
+        assert_eq!(health["status"].as_str(), Some("unknown"));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("Cache file load failed")));
+        assert!(warnings.iter().any(|w| w.contains("provider mismatch")));
+    }
+
+    #[test]
+    fn raw_marginlab_html_is_not_persisted_by_default() {
+        std::env::remove_var("AIRLIFT_WRITE_RAW_MARGINLAB");
+        assert!(!should_write_raw_marginlab());
+
+        std::env::set_var("AIRLIFT_WRITE_RAW_MARGINLAB", "1");
+        assert!(should_write_raw_marginlab());
+        std::env::remove_var("AIRLIFT_WRITE_RAW_MARGINLAB");
     }
 }

@@ -25,13 +25,13 @@ fn main() -> anyhow::Result<()> {
             provider_health,
             provider_health_file,
             provider_health_cache_file,
-            skip_native_install,
+            native_install,
             native_home,
         } => run_migration(
             session, project, out, source, targets,
             provider_health, provider_health_file,
             provider_health_cache_file,
-            skip_native_install, native_home,
+            native_install, native_home,
         ),
         cli::Commands::Health {
             source,
@@ -54,7 +54,7 @@ fn run_migration(
     provider_health: String,
     provider_health_file: Option<String>,
     provider_health_cache_file: Option<String>,
-    skip_native_install: bool,
+    native_install: bool,
     native_home: Option<String>,
 ) -> anyhow::Result<()> {
     println!("🚀 Agent Airlift Demo");
@@ -85,7 +85,12 @@ fn run_migration(
     
     // 2. Create repo snapshot
     println!("📦 Creating repository snapshot...");
-    let repo_snapshot = repo_snapshot::create_repo_snapshot(&config.project_path)?;
+    let output_exclude = if config.output_dir.is_absolute() {
+        config.output_dir.clone()
+    } else {
+        std::env::current_dir()?.join(&config.output_dir)
+    };
+    let repo_snapshot = repo_snapshot::create_repo_snapshot_with_excludes(&config.project_path, &[output_exclude])?;
     fs_util::write_json_pretty(
         &config.output_dir.join("raw/repo-snapshot.json"),
         &repo_snapshot,
@@ -106,8 +111,10 @@ fn run_migration(
         let cache_path = provider_health_cache_file.as_deref().map(std::path::Path::new);
         let (health, raw_marginlab, warnings) =
             provider_health::load_provider_health_marginlab(&cfg, cache_path);
-        if let Some(ref raw) = raw_marginlab {
-            fs::write(config.output_dir.join("raw/marginlab-response.html"), raw)?;
+        if provider_health::should_write_raw_marginlab() {
+            if let Some(ref raw) = raw_marginlab {
+                fs::write(config.output_dir.join("raw/marginlab-response.html"), raw)?;
+            }
         }
         (health, warnings)
     } else {
@@ -154,14 +161,18 @@ fn run_migration(
     let exports_dir = config.output_dir.join("exports");
     for target in &config.target_providers {
         if let Some(res) = native_session::install_native(
-            target, &canonical_turns, &config.project_path, &home, &exports_dir, skip_native_install,
+            target, &canonical_turns, &config.project_path, &home, &exports_dir, !native_install,
         )? {
-            println!("✅ Native {} session: {}", target, res.path.display());
-            println!("   To resume:");
-            if let Some(cd) = &res.cd_hint {
-                println!("     cd {}", cd);
+            if native_install {
+                println!("✅ Native {} session: {}", target, res.path.display());
+                println!("   To resume:");
+                if let Some(cd) = &res.cd_hint {
+                    println!("     cd {}", cd);
+                }
+                println!("     {}", res.resume_cmd);
+            } else {
+                println!("📦 Native {} export copy: {}", target, res.path.display());
             }
-            println!("     {}", res.resume_cmd);
         }
     }
     

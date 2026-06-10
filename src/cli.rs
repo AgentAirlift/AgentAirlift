@@ -16,27 +16,27 @@ pub enum Commands {
         /// Path to session JSONL file
         #[arg(long)]
         session: String,
-        
+
         /// Path to project directory
         #[arg(long)]
         project: String,
-        
+
         /// Output directory
         #[arg(long)]
         out: String,
-        
+
         /// Source provider (e.g., claude-code)
         #[arg(long)]
         source: String,
-        
+
         /// Target providers (comma-separated)
         #[arg(long, value_delimiter = ',')]
         targets: Vec<String>,
-        
+
         /// Provider health source type
         #[arg(long, default_value = "none")]
         provider_health: String,
-        
+
         /// Path to provider health file (if using file source)
         #[arg(long)]
         provider_health_file: Option<String>,
@@ -45,9 +45,9 @@ pub enum Commands {
         #[arg(long)]
         provider_health_cache_file: Option<String>,
 
-        /// Skip installing native resume-compatible sessions into ~/.codex / ~/.claude
+        /// Install native resume-compatible sessions into ~/.codex / ~/.claude
         #[arg(long, default_value_t = false)]
-        skip_native_install: bool,
+        native_install: bool,
 
         /// Override the agent home root for native installs (tests / non-default $HOME)
         #[arg(long)]
@@ -148,5 +148,37 @@ mod tests {
         assert!(!help.contains("apify-task-id"));
         assert!(!help.contains("apify-input-url"));
         assert!(!help.contains("apify-cache-file"));
+    }
+
+    #[test]
+    fn migrate_native_install_is_explicit_opt_in() {
+        let mut help = Vec::new();
+        Cli::command()
+            .find_subcommand_mut("migrate")
+            .expect("migrate subcommand exists")
+            .write_long_help(&mut help)
+            .expect("help renders");
+        let help = String::from_utf8(help).expect("help is utf8");
+
+        assert!(help.contains("--native-install"));
+        assert!(!help.contains("--skip-native-install"));
+
+        let result = Cli::try_parse_from([
+            "agent-airlift",
+            "migrate",
+            "--session",
+            "examples/sessions/claude-code-realistic.jsonl",
+            "--project",
+            "examples/projects/tiny-rust-cli",
+            "--out",
+            "airlift-out",
+            "--source",
+            "claude-code",
+            "--targets",
+            "codex",
+            "--native-install",
+        ]);
+
+        assert!(result.is_ok(), "--native-install should be accepted");
     }
 }

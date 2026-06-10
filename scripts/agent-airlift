@@ -29,19 +29,24 @@ CLAUDE_PLUGIN_DIR = ROOT / "plugins/claude"
 
 
 def backup_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.bak")
+    candidate = path.with_name(f"{path.name}.bak")
+    if not path_exists(candidate):
+        return candidate
+
+    suffix = 1
+    while True:
+        candidate = path.with_name(f"{path.name}.bak.{suffix}")
+        if not path_exists(candidate):
+            return candidate
+        suffix += 1
 
 
-def remove_existing_backup(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
+def path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
 
 
 def move_to_backup(path: Path) -> Path:
     backup = backup_path(path)
-    remove_existing_backup(backup)
     shutil.move(str(path), str(backup))
     return backup
 
@@ -51,16 +56,19 @@ def install_prompt(codex_home: Path, name: str, source: Path) -> tuple[Path, Pat
     destination.parent.mkdir(parents=True, exist_ok=True)
     source = source.resolve()
 
-    if destination.is_symlink():
-        if destination.resolve() == source:
+    if destination.exists() or destination.is_symlink():
+        existing = destination.read_text() if destination.is_file() else None
+        incoming = source.read_text()
+        if existing == incoming:
+            if destination.is_symlink():
+                destination.unlink()
+                shutil.copy2(source, destination)
             return destination, None
-        destination.unlink()
-    elif destination.exists():
         backup = move_to_backup(destination)
-        destination.symlink_to(source)
+        shutil.copy2(source, destination)
         return destination, backup
 
-    destination.symlink_to(source)
+    shutil.copy2(source, destination)
     return destination, None
 
 
