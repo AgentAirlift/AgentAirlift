@@ -35,6 +35,8 @@ fn export_claude_code(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> 
             "timestamp": turn.timestamp,
             "message": {"role": turn.role, "content": turn.content},
             "tool_calls": turn.tool_calls,
+            "tool_results": turn.tool_results,
+            "agent_airlift_canonical": turn,
         });
         lines.push(line.to_string());
     }
@@ -61,6 +63,8 @@ fn export_codex(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow
             "timestamp": turn.timestamp,
             "tool_calls": turn.tool_calls,
             "source": turn.source,
+            "tool_results": turn.tool_results,
+            "agent_airlift_canonical": turn,
         });
         lines.push(line.to_string());
     }
@@ -82,6 +86,9 @@ fn export_kiro(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow:
                 "timestamp": turn.timestamp,
                 "tool_calls": turn.tool_calls,
                 "metadata": turn.metadata,
+                "tool_results": turn.tool_results,
+                "source": turn.source,
+                "agent_airlift_canonical": turn,
             })
         }).collect::<Vec<_>>(),
     });
@@ -94,9 +101,29 @@ fn export_kiro(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow:
     // Create Kiro spec files
     let spec_dir = output_dir.join(".kiro/specs/agent-airlift-handoff");
     std::fs::create_dir_all(&spec_dir)?;
-    std::fs::write(spec_dir.join("requirements.md"), "# Requirements\n\nMigrated session requirements.")?;
-    std::fs::write(spec_dir.join("design.md"), "# Design\n\nSession design documentation.")?;
-    std::fs::write(spec_dir.join("tasks.md"), "# Tasks\n\n1. Review migrated session\n2. Test functionality")?;
+    let records = extract_handoff_records(turns);
+    std::fs::write(
+        spec_dir.join("requirements.md"),
+        format!(
+            "# Requirements\n\n## Current Objective\n> {}\n\n## Source Turns\n- {} turns migrated.\n",
+            current_objective(turns),
+            turns.len()
+        ),
+    )?;
+    std::fs::write(
+        spec_dir.join("design.md"),
+        format!(
+            "# Design\n\n## Preserved Decisions\n{}\n",
+            records_section(&records)
+        ),
+    )?;
+    std::fs::write(
+        spec_dir.join("tasks.md"),
+        format!(
+            "# Tasks\n\n1. Review migrated session artifacts.\n2. Validate current objective: {}.\n3. Run project validation commands.\n",
+            current_objective(turns)
+        ),
+    )?;
     
     Ok(())
 }
@@ -115,6 +142,8 @@ fn export_opencode(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> any
             "text": turn.content,
             "created_at": turn.timestamp,
             "tool_calls": turn.tool_calls,
+            "tool_results": turn.tool_results,
+            "agent_airlift_canonical": turn,
         });
         lines.push(line.to_string());
     }
@@ -130,6 +159,27 @@ fn first_user_content(turns: &[CanonicalTurn]) -> &str {
         .find(|t| t.role == "user")
         .map(|t| t.content.as_str())
         .unwrap_or("No user turns found in session.")
+}
+
+fn current_objective(turns: &[CanonicalTurn]) -> String {
+    let last_user = turns.iter().filter(|t| t.role == "user").last();
+    let last_turn = turns.last();
+    match (last_user, last_turn) {
+        (Some(u), Some(last)) if last.role == "assistant" => {
+            format!("Validate completed request: {}", short_text(&u.content, 240))
+        }
+        (Some(u), _) => short_text(&u.content, 240),
+        (None, _) => "Review migrated session and determine next action.".into(),
+    }
+}
+
+fn short_text(text: &str, limit: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.len() <= limit {
+        collapsed
+    } else {
+        format!("{}...", &collapsed[..limit])
+    }
 }
 
 fn repo_file_list(snapshot: Option<&Value>) -> Vec<String> {
@@ -162,22 +212,77 @@ fn health_summary(health: Option<&Value>, evaluated_provider: &str) -> String {
     }
 }
 
-/// Lines from assistant turns that look like decisions ("Decision:" anywhere).
-fn extract_decisions(turns: &[CanonicalTurn]) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandoffRecord {
+    label: &'static str,
+    text: String,
+    verbatim: bool,
+    turn_id: String,
+}
+
+fn extract_handoff_records(turns: &[CanonicalTurn]) -> Vec<HandoffRecord> {
     let mut out = Vec::new();
-    for t in turns.iter().filter(|t| t.role == "assistant") {
+    for t in turns {
         for line in t.content.lines() {
-            if let Some(idx) = line.find("Decision:").or_else(|| line.find("decision:")) {
-                let d = line[idx..].trim();
-                let entry = format!("- {}", d);
-                if !out.contains(&entry) { out.push(entry); }
+            let upper = line.to_ascii_uppercase();
+            let trimmed = line.trim();
+            let trimmed_upper = trimmed.to_ascii_uppercase();
+            let label = if starts_with_record_label(&trimmed_upper, "DECISION") {
+                Some("DECISION")
+            } else if starts_with_record_label(&trimmed_upper, "RATIONALE") {
+                Some("RATIONALE")
+            } else if starts_with_record_label(&trimmed_upper, "STATUS") {
+                Some("STATUS")
+            } else {
+                None
+            };
+            if let Some(label) = label {
+                let record = HandoffRecord {
+                    label,
+                    text: line.to_string(),
+                    verbatim: true,
+                    turn_id: t.id.clone(),
+                };
+                if !out.contains(&record) {
+                    out.push(record);
+                }
+            } else if let Some(idx) = upper.find("DECISION:") {
+                let record = HandoffRecord {
+                    label: "DECISION",
+                    text: line[idx..].trim().to_string(),
+                    verbatim: false,
+                    turn_id: t.id.clone(),
+                };
+                if !out.contains(&record) {
+                    out.push(record);
+                }
             }
         }
     }
-    if out.is_empty() {
-        out.push("- No explicit Decision: lines detected. Review assistant turns for implicit choices.".into());
-    }
     out
+}
+
+fn starts_with_record_label(line_upper: &str, label: &str) -> bool {
+    line_upper
+        .strip_prefix(label)
+        .is_some_and(|rest| rest.starts_with(':') || rest.starts_with('('))
+}
+
+fn records_section(records: &[HandoffRecord]) -> String {
+    if records.is_empty() {
+        return "- No explicit DECISION/RATIONALE/STATUS records detected. Review assistant turns for implicit choices.".into();
+    }
+    records
+        .iter()
+        .map(|r| {
+            if r.verbatim {
+                r.text.clone()
+            } else {
+                format!("- [{}] {}", r.turn_id, r.text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Commands from assistant content heuristics AND structured Bash tool calls.
@@ -277,10 +382,11 @@ pub fn create_handoff_docs(
     let objective   = first_user_content(turns);
     let files       = repo_file_list(ctx.repo_snapshot);
     let health      = health_summary(ctx.provider_health, ctx.source);
-    let decisions   = extract_decisions(turns);
+    let handoff_records = extract_handoff_records(turns);
     let commands    = extract_commands(turns);
     let errors      = extract_errors(turns);
     let targets_str = ctx.targets.join(", ");
+    let objective_summary = current_objective(turns);
     let last_user   = turns.iter().filter(|t| t.role == "user").last()
                           .map(|t| t.content.as_str()).unwrap_or(objective);
 
@@ -315,7 +421,7 @@ Provider health signal triggered failover or explicit export was requested.
 {files_section}
 
 ## Decisions Made
-{decisions}
+{records}
 
 ## Commands Run
 {commands}
@@ -357,11 +463,11 @@ Use them to seed a fresh session in the target tool, alongside this handoff.
         source     = ctx.source,
         targets    = targets_str,
         health     = health,
-        objective  = objective,
+        objective  = objective_summary,
         turn_count = turns.len(),
         last_user  = &last_user[..last_user.len().min(200)],
         files_section = files_section,
-        decisions  = decisions.join("\n"),
+        records    = records_section(&handoff_records),
         commands   = commands.join("\n"),
         errors     = errors.join("\n"),
     );
@@ -406,6 +512,9 @@ The session has been migrated to: {targets}.
 ## Work Already Completed
 {completed_str}
 
+## Preserved Decision Records
+{records}
+
 ## Do Not Repeat
 - Re-importing the session from scratch.
 - Re-generating files already present in the `exports/` directory.
@@ -433,6 +542,7 @@ cargo test
         objective  = objective,
         files_inspect = files_inspect,
         completed_str = completed_str,
+        records    = records_section(&handoff_records),
         next_task  = next_task_str,
         health     = health_summary(ctx.provider_health, ctx.source),
     );
@@ -513,6 +623,9 @@ mod tests {
                 role: "user".to_string(),
                 content: "Test".to_string(),
                 timestamp: "2024-01-01T10:00:00Z".to_string(),
+                record_type: "user".to_string(),
+                canonical_sha256: "hash-1".to_string(),
+                tool_results: json!([{"type": "tool_result", "content": "result"}]),
                 metadata: json!({}),
                 ..Default::default()
             },
@@ -524,8 +637,14 @@ mod tests {
         fs::create_dir_all(output_dir1).unwrap();
         export_for_target("codex", &canonical_turns, output_dir1).unwrap();
         let codex_content = fs::read_to_string(output_dir1.join("codex-like.session.jsonl")).unwrap();
-        assert!(codex_content.contains("test-1"));
-        assert!(codex_content.contains("user"));
+        let codex_lines: Vec<Value> = codex_content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(codex_lines[0]["resume_compatible"], false);
+        assert_eq!(codex_lines[1]["id"], "test-1");
+        assert_eq!(codex_lines[1]["role"], "user");
+        assert_eq!(codex_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
         
         // Test kiro export
         let temp_dir2 = TempDir::new().unwrap();
@@ -533,8 +652,10 @@ mod tests {
         fs::create_dir_all(output_dir2).unwrap();
         export_for_target("kiro", &canonical_turns, output_dir2).unwrap();
         let kiro_content = fs::read_to_string(output_dir2.join("kiro-session.json")).unwrap();
-        assert!(kiro_content.contains("test-1"));
-        assert!(kiro_content.contains("version"));
+        let kiro: Value = serde_json::from_str(&kiro_content).unwrap();
+        assert_eq!(kiro["version"], "1.0");
+        assert_eq!(kiro["turns"][0]["id"], "test-1");
+        assert_eq!(kiro["turns"][0]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
         
         // Test opencode export
         let temp_dir3 = TempDir::new().unwrap();
@@ -542,8 +663,14 @@ mod tests {
         fs::create_dir_all(output_dir3).unwrap();
         export_for_target("opencode", &canonical_turns, output_dir3).unwrap();
         let opencode_content = fs::read_to_string(output_dir3.join("opencode-like.session.jsonl")).unwrap();
-        assert!(opencode_content.contains("test-1"));
-        assert!(opencode_content.contains("sender"));
+        let opencode_lines: Vec<Value> = opencode_content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(opencode_lines[0]["resume_compatible"], false);
+        assert_eq!(opencode_lines[1]["message_id"], "test-1");
+        assert_eq!(opencode_lines[1]["sender"], "user");
+        assert_eq!(opencode_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
         
         // Test invalid target
         let result = export_for_target("invalid", &canonical_turns, output_dir1);
@@ -597,7 +724,7 @@ mod tests {
             CanonicalTurn { id: "u1".into(), role: "user".into(),
                 content: "Add a /health endpoint".into(), timestamp: "".into(), ..Default::default() },
             CanonicalTurn { id: "a1".into(), role: "assistant".into(),
-                content: "Decision: using axum::Json.\n$ cargo build\nerror[E0425]: cannot find function".into(),
+                content: "DECISION(auth-json): using axum::Json.\nRATIONALE(auth-json): matches existing handlers.\nSTATUS(auth-json): settled - do not revisit.\n$ cargo build\nerror[E0425]: cannot find function".into(),
                 timestamp: "".into(), ..Default::default() },
         ];
         let targets = vec!["codex".to_string()];
@@ -623,6 +750,71 @@ mod tests {
         assert!(h.contains("axum::Json"));
         assert!(h.contains("cargo build"));
         assert!(h.contains("E0425"));
+        assert!(h.contains("DECISION(auth-json): using axum::Json."));
+        assert!(h.contains("RATIONALE(auth-json): matches existing handlers."));
+        assert!(h.contains("STATUS(auth-json): settled - do not revisit."));
+
+        let agents = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains("DECISION(auth-json): using axum::Json."));
+        assert!(agents.contains("RATIONALE(auth-json): matches existing handlers."));
+        assert!(agents.contains("STATUS(auth-json): settled - do not revisit."));
+    }
+
+    #[test]
+    fn test_kiro_specs_include_real_session_context() {
+        let turns = vec![
+            CanonicalTurn {
+                id: "u1".into(),
+                role: "user".into(),
+                content: "Build real Kiro specs".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
+            CanonicalTurn {
+                id: "a1".into(),
+                role: "assistant".into(),
+                content: "DECISION(specs): derive specs from handoff context.\nRATIONALE: placeholders lose task state.\nSTATUS: settled.".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
+        ];
+        let dir = TempDir::new().unwrap();
+        export_for_target("kiro", &turns, dir.path()).unwrap();
+
+        let spec_dir = dir.path().join(".kiro/specs/agent-airlift-handoff");
+        let requirements = fs::read_to_string(spec_dir.join("requirements.md")).unwrap();
+        let design = fs::read_to_string(spec_dir.join("design.md")).unwrap();
+        let tasks = fs::read_to_string(spec_dir.join("tasks.md")).unwrap();
+
+        assert!(requirements.contains("Build real Kiro specs"));
+        assert!(design.contains("DECISION(specs): derive specs"));
+        assert!(design.contains("RATIONALE: placeholders lose task state."));
+        assert!(tasks.contains("Review migrated session"));
+    }
+
+    #[test]
+    fn test_inline_decision_pattern_still_survives() {
+        let turns = vec![
+            CanonicalTurn {
+                id: "a1".into(),
+                role: "assistant".into(),
+                content: "Done. Decision: base62.".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
+        ];
+        let targets = vec!["codex".to_string()];
+        let ctx = HandoffContext {
+            source: "claude-code",
+            targets: &targets,
+            repo_snapshot: None,
+            provider_health: None,
+        };
+        let dir = TempDir::new().unwrap();
+        create_handoff_docs(&turns, &ctx, dir.path()).unwrap();
+
+        let handoff = fs::read_to_string(dir.path().join("HANDOFF.md")).unwrap();
+        assert!(handoff.contains("Decision: base62."));
     }
 
     #[test]

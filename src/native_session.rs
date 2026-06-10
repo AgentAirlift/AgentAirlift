@@ -59,6 +59,7 @@ fn install_codex(
     let cwd = abs_project(project_path);
     let ts = session_time(turns);
     let digest = origin_digest(turns);
+    let legacy_digest = legacy_origin_digest(turns);
     let session_id = new_id();
     let lines = codex_lines(turns, &session_id, &cwd, &ts, source, &digest);
 
@@ -69,7 +70,7 @@ fn install_codex(
     let mut written = export_copy;
     if !skip_install {
         let base = home.join(".codex/sessions");
-        written = match find_existing(&base, true, source, &digest) {
+        written = match find_existing(&base, true, source, &[&digest, &legacy_digest]) {
             Some(existing) => existing,
             None => {
                 let dir = base
@@ -162,6 +163,7 @@ fn install_claude(
     let encoded = cwd.replace('/', "-");
     let ts = session_time(turns);
     let digest = origin_digest(turns);
+    let legacy_digest = legacy_origin_digest(turns);
     let session_id = new_id();
     let lines = claude_lines(turns, &session_id, &ts, source, &digest);
 
@@ -172,7 +174,7 @@ fn install_claude(
     let mut written = export_copy;
     if !skip_install {
         let proj_dir = home.join(".claude/projects").join(&encoded);
-        written = match find_existing(&proj_dir, false, source, &digest) {
+        written = match find_existing(&proj_dir, false, source, &[&digest, &legacy_digest]) {
             Some(existing) => existing,
             None => {
                 let path = proj_dir.join(&filename);
@@ -263,6 +265,15 @@ fn entry_ts(turn: &CanonicalTurn, fallback: &str) -> String {
 fn origin_digest(turns: &[CanonicalTurn]) -> String {
     let mut hasher = Sha256::new();
     for t in turns {
+        hasher.update(serde_json::to_vec(t).unwrap_or_default());
+        hasher.update([0x1e]);
+    }
+    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn legacy_origin_digest(turns: &[CanonicalTurn]) -> String {
+    let mut hasher = Sha256::new();
+    for t in turns {
         hasher.update(t.role.as_bytes());
         hasher.update([0x1f]);
         hasher.update(t.timestamp.as_bytes());
@@ -292,7 +303,7 @@ fn write_lines(path: &Path, lines: &[String]) -> anyhow::Result<()> {
 }
 
 /// Finds an existing migrated session in `dir` with the same source + digest.
-fn find_existing(dir: &Path, recursive: bool, source: &str, digest: &str) -> Option<PathBuf> {
+fn find_existing(dir: &Path, recursive: bool, source: &str, digests: &[&str]) -> Option<PathBuf> {
     let files: Vec<PathBuf> = if recursive {
         walkdir::WalkDir::new(dir)
             .into_iter()
@@ -311,7 +322,7 @@ fn find_existing(dir: &Path, recursive: bool, source: &str, digest: &str) -> Opt
     };
     files
         .into_iter()
-        .find(|f| read_meta(f).is_some_and(|(s, d)| s == source && d == digest))
+        .find(|f| read_meta(f).is_some_and(|(s, d)| s == source && digests.iter().any(|digest| d == *digest)))
 }
 
 /// Reads `(originSource, originDigest)` from a session's migration meta line,
@@ -429,6 +440,29 @@ mod tests {
     }
 
     #[test]
+    fn dedup_recognizes_legacy_digest() {
+        let home = TempDir::new().unwrap();
+        let exports = TempDir::new().unwrap();
+        let turns = turns();
+        let legacy_digest = legacy_origin_digest(&turns);
+        let existing_dir = home.path().join(".codex/sessions/2026/05/29");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+        let existing = existing_dir.join("rollout-2026-05-29T19-00-00-11111111-1111-1111-1111-111111111111.jsonl");
+        std::fs::write(
+            &existing,
+            format!(
+                "{}\n",
+                migration_meta("claude-code", turns.len(), &legacy_digest)
+            ),
+        ).unwrap();
+
+        let res = install_native("codex", &turns, home.path(), home.path(), exports.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res.path, existing);
+    }
+
+    #[test]
     fn skip_install_writes_export_only() {
         let home = TempDir::new().unwrap();
         let exports = TempDir::new().unwrap();
@@ -444,5 +478,15 @@ mod tests {
         let exports = TempDir::new().unwrap();
         assert!(install_native("kiro", &turns(), home.path(), home.path(), exports.path(), false)
             .unwrap().is_none());
+    }
+
+    #[test]
+    fn origin_digest_includes_structured_canonical_fields() {
+        let mut first = turns();
+        let mut second = turns();
+        first[1].tool_results = json!([{"content": "first"}]);
+        second[1].tool_results = json!([{"content": "second"}]);
+
+        assert_ne!(origin_digest(&first), origin_digest(&second));
     }
 }
