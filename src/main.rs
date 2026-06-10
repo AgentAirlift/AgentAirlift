@@ -122,7 +122,8 @@ fn run_migration(
     
     // 4. Normalize session
     println!("🔄 Normalizing session...");
-    let (canonical_turns, _, dropped_fields) = canonical::normalize_turns(turns, &config.source_provider);
+    let (canonical_turns, canonical_warnings, dropped_fields) =
+        canonical::normalize_turns(turns, &config.source_provider);
     fs_util::write_json_pretty(
         &config.output_dir.join("normalized/canonical-session.json"),
         &serde_json::to_value(&canonical_turns)?,
@@ -131,12 +132,7 @@ fn run_migration(
     // 5. Create replay session
     println!("🎬 Creating replay session...");
     let replay_lines: Vec<String> = canonical_turns.iter().map(|turn| {
-        serde_json::json!({
-            "id": turn.id,
-            "role": turn.role,
-            "content": turn.content,
-            "timestamp": turn.timestamp,
-        }).to_string()
+        replay_line(turn)
     }).collect();
     fs_util::write_jsonl(
         &config.output_dir.join("replay/agent-airlift.session.jsonl"),
@@ -182,6 +178,7 @@ fn run_migration(
     // 8. Create audit reports
     println!("📊 Creating audit reports...");
     diagnostics.warnings.extend(health_warnings);
+    diagnostics.warnings.extend(canonical_warnings);
     audit::create_audit_report(
         &canonical_turns,
         &diagnostics,
@@ -199,6 +196,17 @@ fn run_migration(
     println!("   - Output location: {}", config.output_dir.display());
 
     Ok(())
+}
+
+fn replay_line(turn: &canonical::CanonicalTurn) -> String {
+    serde_json::json!({
+        "type": "airlift_replay_record",
+        "replayable": matches!(turn.role.as_str(), "user" | "assistant"),
+        "record_type": turn.record_type,
+        "canonical_sha256": turn.canonical_sha256,
+        "canonical": turn,
+    })
+    .to_string()
 }
 
 fn run_health(
@@ -243,4 +251,44 @@ fn run_health(
         health["source"].as_str().unwrap_or("unknown"),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn replay_line_wraps_non_message_records_as_metadata() {
+        let turn = canonical::CanonicalTurn {
+            id: "s1".into(),
+            role: "summary".into(),
+            content: "Compaction summary".into(),
+            record_type: "summary".into(),
+            canonical_sha256: "hash".into(),
+            metadata: json!({}),
+            ..Default::default()
+        };
+
+        let line: serde_json::Value = serde_json::from_str(&replay_line(&turn)).unwrap();
+        assert_eq!(line["type"], "airlift_replay_record");
+        assert_eq!(line["replayable"], false);
+        assert_eq!(line["canonical"]["role"], "summary");
+        assert_eq!(line["canonical_sha256"], "hash");
+    }
+
+    #[test]
+    fn replay_line_marks_user_and_assistant_as_replayable() {
+        let turn = canonical::CanonicalTurn {
+            id: "u1".into(),
+            role: "user".into(),
+            content: "Continue".into(),
+            record_type: "user".into(),
+            metadata: json!({}),
+            ..Default::default()
+        };
+
+        let line: serde_json::Value = serde_json::from_str(&replay_line(&turn)).unwrap();
+        assert_eq!(line["replayable"], true);
+    }
 }

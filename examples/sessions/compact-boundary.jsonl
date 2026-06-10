@@ -1,0 +1,4 @@
+{"type":"user","uuid":"u-compact-1","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"Start a long task."}}
+{"type":"assistant","uuid":"a-compact-1","timestamp":"2026-06-01T10:00:05Z","message":{"role":"assistant","content":"Working through the setup."}}
+{"type":"summary","uuid":"s-compact-1","timestamp":"2026-06-01T10:05:00Z","summary":"Compaction summary: older context decided to keep API v2 and avoid redoing auth-skip-abc."}
+{"type":"future_event","uuid":"f-compact-1","timestamp":"2026-06-01T10:05:01Z","payload":{"note":"preserve unknown payload","status":"settled"}}
