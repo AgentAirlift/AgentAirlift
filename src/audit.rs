@@ -116,6 +116,182 @@ pub fn create_audit_report(
     Ok(())
 }
 
+pub fn create_ci_gate_report(
+    turns: &[CanonicalTurn],
+    diagnostics: &ImportDiagnostics,
+    dropped_fields: &Value,
+    targets: &[String],
+    output_root: &Path,
+) -> anyhow::Result<()> {
+    let audit_dir = output_root.join("audit");
+    fs::create_dir_all(&audit_dir)?;
+
+    let accounting_balanced = diagnostics.accounting_balanced
+        && diagnostics.lines_read
+            == diagnostics.mapped_records
+                + diagnostics.intentionally_skipped_records
+                + diagnostics.malformed_records;
+    let dropped_field_budget_clean = dropped_fields
+        .get("unapproved_drops")
+        .and_then(|v| v.as_array())
+        .is_some_and(|drops| drops.is_empty());
+    let canonical_nonempty = !turns.is_empty()
+        && read_json_file(&output_root.join("normalized/canonical-session.json"))
+            .ok()
+            .and_then(|v| v.as_array().map(|arr| arr.len() == turns.len()))
+            .unwrap_or(false);
+    let hashes_present = turns.iter().all(|turn| {
+        is_sha256_hex(&turn.raw_sha256) && is_sha256_hex(&turn.canonical_sha256)
+    });
+    let replay_hashes_match = replay_hashes_match(output_root, turns).unwrap_or(false);
+    let exports_nonempty = exports_nonempty(output_root, targets);
+    let exports_match_canonical = exports_match_canonical(output_root, targets, turns).unwrap_or(false);
+
+    let checks = json!({
+        "accounting_balanced": accounting_balanced,
+        "dropped_field_budget_clean": dropped_field_budget_clean,
+        "canonical_nonempty": canonical_nonempty,
+        "hashes_present": hashes_present,
+        "replay_hashes_match": replay_hashes_match,
+        "exports_nonempty": exports_nonempty,
+        "exports_match_canonical": exports_match_canonical,
+    });
+
+    let failures = checks
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter_map(|(name, passed)| {
+            if passed.as_bool() == Some(true) {
+                None
+            } else {
+                Some(name.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    let report = json!({
+        "passed": failures.is_empty(),
+        "checks": checks,
+        "failures": failures,
+        "targets": targets,
+        "canonical_turns": turns.len(),
+    });
+    fs::write(
+        audit_dir.join("ci-gate.json"),
+        serde_json::to_string_pretty(&report)?,
+    )?;
+
+    if !report["passed"].as_bool().unwrap_or(false) {
+        anyhow::bail!("CI gate failed: {}", report["failures"]);
+    }
+    Ok(())
+}
+
+fn read_json_file(path: &Path) -> anyhow::Result<Value> {
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
+fn read_jsonl_file(path: &Path) -> anyhow::Result<Vec<Value>> {
+    Ok(fs::read_to_string(path)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn replay_hashes_match(output_root: &Path, turns: &[CanonicalTurn]) -> anyhow::Result<bool> {
+    let replay = read_jsonl_file(&output_root.join("replay/agent-airlift.session.jsonl"))?;
+    if replay.len() != turns.len() {
+        return Ok(false);
+    }
+    Ok(replay.iter().zip(turns.iter()).all(|(line, turn)| {
+        line["canonical_sha256"] == turn.canonical_sha256
+            && line["canonical"]["canonical_sha256"] == turn.canonical_sha256
+    }))
+}
+
+fn exports_nonempty(output_root: &Path, targets: &[String]) -> bool {
+    let exports_dir = output_root.join("exports");
+    if !has_nonempty_file(&exports_dir.join("HANDOFF.md"))
+        || !has_nonempty_file(&exports_dir.join("AGENTS.md"))
+    {
+        return false;
+    }
+    targets.iter().all(|target| match target.as_str() {
+        "codex" => {
+            has_nonempty_file(&exports_dir.join("codex-like.session.jsonl"))
+                && has_any_file(&exports_dir.join("native/codex"))
+        }
+        "claude-code" => {
+            has_nonempty_file(&exports_dir.join("claude-code-like.session.jsonl"))
+                && has_any_file(&exports_dir.join("native/claude-code"))
+        }
+        "kiro" => has_nonempty_file(&exports_dir.join("kiro-session.json")),
+        "opencode" => has_nonempty_file(&exports_dir.join("opencode-like.session.jsonl")),
+        _ => false,
+    })
+}
+
+fn has_nonempty_file(path: &Path) -> bool {
+    fs::metadata(path).map(|m| m.is_file() && m.len() > 0).unwrap_or(false)
+}
+
+fn has_any_file(path: &Path) -> bool {
+    fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().is_file())
+        })
+        .unwrap_or(false)
+}
+
+fn exports_match_canonical(
+    output_root: &Path,
+    targets: &[String],
+    turns: &[CanonicalTurn],
+) -> anyhow::Result<bool> {
+    let expected = turns
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    for target in targets {
+        let actual = export_canonical_sidecars(output_root, target)?;
+        if actual != expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn export_canonical_sidecars(output_root: &Path, target: &str) -> anyhow::Result<Vec<Value>> {
+    let exports_dir = output_root.join("exports");
+    match target {
+        "codex" => jsonl_canonical_sidecars(&exports_dir.join("codex-like.session.jsonl")),
+        "claude-code" => jsonl_canonical_sidecars(&exports_dir.join("claude-code-like.session.jsonl")),
+        "opencode" => jsonl_canonical_sidecars(&exports_dir.join("opencode-like.session.jsonl")),
+        "kiro" => Ok(read_json_file(&exports_dir.join("kiro-session.json"))?["turns"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|turn| turn["agent_airlift_canonical"].clone())
+            .collect()),
+        _ => anyhow::bail!("Unsupported target in CI gate: {}", target),
+    }
+}
+
+fn jsonl_canonical_sidecars(path: &Path) -> anyhow::Result<Vec<Value>> {
+    Ok(read_jsonl_file(path)?
+        .into_iter()
+        .skip(1)
+        .map(|line| line["agent_airlift_canonical"].clone())
+        .collect())
+}
+
 /// Heuristic guard: detects strings that look like leaked credential *values*
 /// (not mere mentions of an env-var name). Used by tests to assert audit
 /// artifacts never embed secrets.

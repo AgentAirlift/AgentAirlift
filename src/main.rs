@@ -197,6 +197,13 @@ fn run_migration(
         &config.source_provider,
         &config.output_dir.join("audit"),
     )?;
+    audit::create_ci_gate_report(
+        &canonical_turns,
+        &diagnostics,
+        &dropped_fields,
+        &config.target_providers,
+        &config.output_dir,
+    )?;
     
     // Summary
     println!("\n✅ Demo completed successfully!");
