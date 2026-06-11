@@ -1,5 +1,5 @@
-use serde_json::{json, Value};
 use crate::canonical::CanonicalTurn;
+use serde_json::{json, Value};
 
 /// Lightweight context extracted from session + repo + health for doc generation.
 pub struct HandoffContext<'a> {
@@ -9,7 +9,11 @@ pub struct HandoffContext<'a> {
     pub provider_health: Option<&'a Value>,
 }
 
-pub fn export_for_target(target: &str, turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow::Result<()> {
+pub fn export_for_target(
+    target: &str,
+    turns: &[CanonicalTurn],
+    output_dir: &std::path::Path,
+) -> anyhow::Result<()> {
     match target {
         "codex" => export_codex(turns, output_dir),
         "claude-code" => export_claude_code(turns, output_dir),
@@ -68,7 +72,7 @@ fn export_codex(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow
         });
         lines.push(line.to_string());
     }
-    
+
     crate::fs_util::write_jsonl(&output_dir.join("codex-like.session.jsonl"), &lines)?;
     Ok(())
 }
@@ -92,12 +96,9 @@ fn export_kiro(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow:
             })
         }).collect::<Vec<_>>(),
     });
-    
-    crate::fs_util::write_json_pretty(
-        &output_dir.join("kiro-session.json"),
-        &kiro_session,
-    )?;
-    
+
+    crate::fs_util::write_json_pretty(&output_dir.join("kiro-session.json"), &kiro_session)?;
+
     // Create Kiro spec files
     let spec_dir = output_dir.join(".kiro/specs/agent-airlift-handoff");
     std::fs::create_dir_all(&spec_dir)?;
@@ -124,7 +125,7 @@ fn export_kiro(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> anyhow:
             current_objective(turns)
         ),
     )?;
-    
+
     Ok(())
 }
 
@@ -134,7 +135,8 @@ fn export_opencode(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> any
         "format": "opencode-like",
         "resume_compatible": false,
         "note": "Readable export for resuming context, not a native OpenCode session file."
-    }).to_string()];
+    })
+    .to_string()];
     for turn in turns {
         let line = json!({
             "message_id": turn.id,
@@ -147,7 +149,7 @@ fn export_opencode(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> any
         });
         lines.push(line.to_string());
     }
-    
+
     crate::fs_util::write_jsonl(&output_dir.join("opencode-like.session.jsonl"), &lines)?;
     Ok(())
 }
@@ -155,7 +157,8 @@ fn export_opencode(turns: &[CanonicalTurn], output_dir: &std::path::Path) -> any
 // ── extraction helpers ────────────────────────────────────────────────────────
 
 fn first_user_content(turns: &[CanonicalTurn]) -> &str {
-    turns.iter()
+    turns
+        .iter()
         .find(|t| t.role == "user")
         .map(|t| t.content.as_str())
         .unwrap_or("No user turns found in session.")
@@ -166,7 +169,10 @@ fn current_objective(turns: &[CanonicalTurn]) -> String {
     let last_turn = turns.last();
     match (last_user, last_turn) {
         (Some(u), Some(last)) if last.role == "assistant" => {
-            format!("Validate completed request: {}", short_text(&u.content, 240))
+            format!(
+                "Validate completed request: {}",
+                short_text(&u.content, 240)
+            )
         }
         (Some(u), _) => short_text(&u.content, 240),
         (None, _) => "Review migrated session and determine next action.".into(),
@@ -186,10 +192,12 @@ fn repo_file_list(snapshot: Option<&Value>) -> Vec<String> {
     snapshot
         .and_then(|s| s.get("files"))
         .and_then(|f| f.as_array())
-        .map(|arr| arr.iter()
-            .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
-            .map(|p| format!("- `{}`", p))
-            .collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
+                .map(|p| format!("- `{}`", p))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -199,11 +207,23 @@ fn health_summary(health: Option<&Value>, evaluated_provider: &str) -> String {
         Some(h) => {
             // `source` = signal origin (marginlab, cached-marginlab, file, mock)
             // `provider` = evaluated provider (claude-code, etc.)
-            let signal_source = h.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let provider      = h.get("provider").and_then(|v| v.as_str()).unwrap_or(evaluated_provider);
-            let status        = h.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let reason        = h.get("reason").or_else(|| h.get("message"))
-                                  .and_then(|v| v.as_str()).unwrap_or("");
+            let signal_source = h
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let provider = h
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or(evaluated_provider);
+            let status = h
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let reason = h
+                .get("reason")
+                .or_else(|| h.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             format!(
                 "Provider health signal from `{}`: `{}` is **{}**. {}",
                 signal_source, provider, status, reason
@@ -223,23 +243,51 @@ struct HandoffRecord {
 fn extract_handoff_records(turns: &[CanonicalTurn]) -> Vec<HandoffRecord> {
     let mut out = Vec::new();
     for t in turns {
-        for line in t.content.lines() {
-            let upper = line.to_ascii_uppercase();
+        let lines: Vec<&str> = t.content.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
             let trimmed = line.trim();
-            let trimmed_upper = trimmed.to_ascii_uppercase();
-            let label = if starts_with_record_label(&trimmed_upper, "DECISION") {
-                Some("DECISION")
-            } else if starts_with_record_label(&trimmed_upper, "RATIONALE") {
-                Some("RATIONALE")
-            } else if starts_with_record_label(&trimmed_upper, "STATUS") {
-                Some("STATUS")
-            } else {
-                None
-            };
-            if let Some(label) = label {
+            let record_text = strip_list_marker(trimmed);
+            let upper = record_text.to_ascii_uppercase();
+            if let Some(label) = record_label(&upper) {
+                let mut text = record_text.to_string();
+                i += 1;
+                while i < lines.len() {
+                    let continuation_trimmed = lines[i].trim();
+                    let continuation_record_text = strip_list_marker(continuation_trimmed);
+                    let continuation_upper = continuation_record_text.to_ascii_uppercase();
+                    if continuation_trimmed.is_empty()
+                        || record_label(&continuation_upper).is_some()
+                        || malformed_record_label(&continuation_upper).is_some()
+                    {
+                        break;
+                    }
+                    if is_record_continuation(lines[i]) {
+                        text.push('\n');
+                        text.push_str(lines[i].trim_end());
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
                 let record = HandoffRecord {
                     label,
-                    text: line.to_string(),
+                    text,
+                    verbatim: true,
+                    turn_id: t.id.clone(),
+                };
+                if !out.contains(&record) {
+                    out.push(record);
+                }
+                continue;
+            } else if let Some(label) = malformed_record_label(&upper) {
+                let record = HandoffRecord {
+                    label: "WARNING",
+                    text: format!(
+                        "WARNING: malformed {} record in turn {}: {}",
+                        label, t.id, record_text
+                    ),
                     verbatim: true,
                     turn_id: t.id.clone(),
                 };
@@ -249,7 +297,7 @@ fn extract_handoff_records(turns: &[CanonicalTurn]) -> Vec<HandoffRecord> {
             } else if let Some(idx) = upper.find("DECISION:") {
                 let record = HandoffRecord {
                     label: "DECISION",
-                    text: line[idx..].trim().to_string(),
+                    text: record_text[idx..].trim().to_string(),
                     verbatim: false,
                     turn_id: t.id.clone(),
                 };
@@ -257,15 +305,67 @@ fn extract_handoff_records(turns: &[CanonicalTurn]) -> Vec<HandoffRecord> {
                     out.push(record);
                 }
             }
+            i += 1;
         }
     }
     out
+}
+
+fn record_label(line_upper: &str) -> Option<&'static str> {
+    if starts_with_record_label(line_upper, "DECISION") {
+        Some("DECISION")
+    } else if starts_with_record_label(line_upper, "RATIONALE") {
+        Some("RATIONALE")
+    } else if starts_with_record_label(line_upper, "STATUS") {
+        Some("STATUS")
+    } else {
+        None
+    }
 }
 
 fn starts_with_record_label(line_upper: &str, label: &str) -> bool {
     line_upper
         .strip_prefix(label)
         .is_some_and(|rest| rest.starts_with(':') || rest.starts_with('('))
+}
+
+fn malformed_record_label(line_upper: &str) -> Option<&'static str> {
+    for label in ["DECISION", "RATIONALE", "STATUS"] {
+        if let Some(rest) = line_upper.strip_prefix(label) {
+            if rest.is_empty() || rest.starts_with(':') || rest.starts_with('(') {
+                return None;
+            }
+            if rest
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_whitespace() || c == '-')
+            {
+                return Some(label);
+            }
+        }
+    }
+    None
+}
+
+fn is_record_continuation(line: &str) -> bool {
+    line.starts_with(' ') || line.starts_with('\t')
+}
+
+fn strip_list_marker(line: &str) -> &str {
+    for marker in ["- ", "* "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            return rest.trim_start();
+        }
+    }
+    let bytes = line.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx > 0 && bytes.get(idx) == Some(&b'.') && bytes.get(idx + 1) == Some(&b' ') {
+        return line[idx + 2..].trim_start();
+    }
+    line
 }
 
 fn records_section(records: &[HandoffRecord]) -> String {
@@ -290,7 +390,9 @@ fn extract_commands(turns: &[CanonicalTurn]) -> Vec<String> {
     let mut out = Vec::new();
     let push = |cmd: &str, out: &mut Vec<String>| {
         let entry = format!("- `{}`", cmd.trim());
-        if !cmd.trim().is_empty() && !out.contains(&entry) { out.push(entry); }
+        if !cmd.trim().is_empty() && !out.contains(&entry) {
+            out.push(entry);
+        }
     };
     for t in turns {
         // Structured: Bash/shell tool calls expose the exact command.
@@ -298,7 +400,11 @@ fn extract_commands(turns: &[CanonicalTurn]) -> Vec<String> {
             for c in calls {
                 let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 if name.eq_ignore_ascii_case("bash") || name.eq_ignore_ascii_case("shell") {
-                    if let Some(cmd) = c.get("input").and_then(|i| i.get("command")).and_then(|v| v.as_str()) {
+                    if let Some(cmd) = c
+                        .get("input")
+                        .and_then(|i| i.get("command"))
+                        .and_then(|v| v.as_str())
+                    {
                         push(cmd, &mut out);
                     }
                 }
@@ -307,7 +413,11 @@ fn extract_commands(turns: &[CanonicalTurn]) -> Vec<String> {
         // Heuristic: command-looking lines in text content.
         for line in t.content.lines() {
             let l = line.trim();
-            if l.starts_with("$ ") || l.starts_with("cargo ") || l.starts_with("npm ") || l.starts_with("git ") {
+            if l.starts_with("$ ")
+                || l.starts_with("cargo ")
+                || l.starts_with("npm ")
+                || l.starts_with("git ")
+            {
                 push(l.trim_start_matches("$ "), &mut out);
             }
         }
@@ -326,7 +436,9 @@ fn extract_errors(turns: &[CanonicalTurn]) -> Vec<String> {
             if l.contains("error") || l.contains("failed") || l.contains("panic") {
                 let snippet = line.trim();
                 let entry = format!("- {}", &snippet[..snippet.len().min(120)]);
-                if !out.contains(&entry) { out.push(entry); }
+                if !out.contains(&entry) {
+                    out.push(entry);
+                }
             }
         }
     }
@@ -337,12 +449,18 @@ fn extract_errors(turns: &[CanonicalTurn]) -> Vec<String> {
 }
 
 fn work_completed(turns: &[CanonicalTurn]) -> Vec<String> {
-    turns.iter()
+    turns
+        .iter()
         .filter(|t| t.role == "assistant")
         .enumerate()
         .map(|(i, t)| {
             let preview = t.content.lines().next().unwrap_or("(empty)").trim();
-            format!("{}. [{}] {}", i + 1, t.id, &preview[..preview.len().min(100)])
+            format!(
+                "{}. [{}] {}",
+                i + 1,
+                t.id,
+                &preview[..preview.len().min(100)]
+            )
         })
         .collect()
 }
@@ -379,16 +497,20 @@ pub fn create_handoff_docs(
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(output_dir)?;
 
-    let objective   = first_user_content(turns);
-    let files       = repo_file_list(ctx.repo_snapshot);
-    let health      = health_summary(ctx.provider_health, ctx.source);
+    let objective = first_user_content(turns);
+    let files = repo_file_list(ctx.repo_snapshot);
+    let health = health_summary(ctx.provider_health, ctx.source);
     let handoff_records = extract_handoff_records(turns);
-    let commands    = extract_commands(turns);
-    let errors      = extract_errors(turns);
+    let commands = extract_commands(turns);
+    let errors = extract_errors(turns);
     let targets_str = ctx.targets.join(", ");
     let objective_summary = current_objective(turns);
-    let last_user   = turns.iter().filter(|t| t.role == "user").last()
-                          .map(|t| t.content.as_str()).unwrap_or(objective);
+    let last_user = turns
+        .iter()
+        .filter(|t| t.role == "user")
+        .last()
+        .map(|t| t.content.as_str())
+        .unwrap_or(objective);
 
     let files_section = if files.is_empty() {
         "No repo snapshot available. Inspect project root manually.".into()
@@ -397,7 +519,7 @@ pub fn create_handoff_docs(
     };
 
     let handoff = format!(
-r#"# Agent Airlift Handoff
+        r#"# Agent Airlift Handoff
 
 ## Why This Handoff Exists
 Session migrated from **{source}** to [{targets}] via Agent Airlift.
@@ -460,16 +582,16 @@ Use them to seed a fresh session in the target tool, alongside this handoff.
 - `replay/agent-airlift.session.jsonl` — replay-ready session
 - `audit/conversion-report.md` — import diagnostics + turn stats
 "#,
-        source     = ctx.source,
-        targets    = targets_str,
-        health     = health,
-        objective  = objective_summary,
+        source = ctx.source,
+        targets = targets_str,
+        health = health,
+        objective = objective_summary,
         turn_count = turns.len(),
-        last_user  = &last_user[..last_user.len().min(200)],
+        last_user = &last_user[..last_user.len().min(200)],
         files_section = files_section,
-        records    = records_section(&handoff_records),
-        commands   = commands.join("\n"),
-        errors     = errors.join("\n"),
+        records = records_section(&handoff_records),
+        commands = commands.join("\n"),
+        errors = errors.join("\n"),
     );
 
     std::fs::write(output_dir.join("HANDOFF.md"), handoff)?;
@@ -485,13 +607,18 @@ Use them to seed a fresh session in the target tool, alongside this handoff.
     let files_inspect = if files.is_empty() {
         "- Inspect project root — no snapshot available.".into()
     } else {
-        files.iter().take(10).cloned().collect::<Vec<_>>().join("\n")
+        files
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     let next_task_str = next_task(turns);
 
     let agents = format!(
-r#"# AGENTS.md — Agent Handoff Instructions
+        r#"# AGENTS.md — Agent Handoff Instructions
 
 ## Project Context
 This project was being worked on in a `{source}` session with {turn_count} turns.
@@ -536,15 +663,15 @@ cargo test
 - Target exports in `exports/` are readable context seeds, not native session files;
   native resume compatibility is not guaranteed.
 "#,
-        source     = ctx.source,
-        targets    = targets_str,
+        source = ctx.source,
+        targets = targets_str,
         turn_count = turns.len(),
-        objective  = objective,
+        objective = objective,
         files_inspect = files_inspect,
         completed_str = completed_str,
-        records    = records_section(&handoff_records),
-        next_task  = next_task_str,
-        health     = health_summary(ctx.provider_health, ctx.source),
+        records = records_section(&handoff_records),
+        next_task = next_task_str,
+        health = health_summary(ctx.provider_health, ctx.source),
     );
 
     std::fs::write(output_dir.join("AGENTS.md"), agents)?;
@@ -555,9 +682,9 @@ cargo test
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
-    use serde_json::json;
 
     #[test]
     fn test_handoff_and_kiro_files_generated() {
@@ -617,26 +744,25 @@ mod tests {
 
     #[test]
     fn test_export_for_targets() {
-        let canonical_turns = vec![
-            CanonicalTurn {
-                id: "test-1".to_string(),
-                role: "user".to_string(),
-                content: "Test".to_string(),
-                timestamp: "2024-01-01T10:00:00Z".to_string(),
-                record_type: "user".to_string(),
-                canonical_sha256: "hash-1".to_string(),
-                tool_results: json!([{"type": "tool_result", "content": "result"}]),
-                metadata: json!({}),
-                ..Default::default()
-            },
-        ];
-        
+        let canonical_turns = vec![CanonicalTurn {
+            id: "test-1".to_string(),
+            role: "user".to_string(),
+            content: "Test".to_string(),
+            timestamp: "2024-01-01T10:00:00Z".to_string(),
+            record_type: "user".to_string(),
+            canonical_sha256: "hash-1".to_string(),
+            tool_results: json!([{"type": "tool_result", "content": "result"}]),
+            metadata: json!({}),
+            ..Default::default()
+        }];
+
         // Test codex export
         let temp_dir1 = TempDir::new().unwrap();
         let output_dir1 = temp_dir1.path();
         fs::create_dir_all(output_dir1).unwrap();
         export_for_target("codex", &canonical_turns, output_dir1).unwrap();
-        let codex_content = fs::read_to_string(output_dir1.join("codex-like.session.jsonl")).unwrap();
+        let codex_content =
+            fs::read_to_string(output_dir1.join("codex-like.session.jsonl")).unwrap();
         let codex_lines: Vec<Value> = codex_content
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -644,8 +770,11 @@ mod tests {
         assert_eq!(codex_lines[0]["resume_compatible"], false);
         assert_eq!(codex_lines[1]["id"], "test-1");
         assert_eq!(codex_lines[1]["role"], "user");
-        assert_eq!(codex_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
-        
+        assert_eq!(
+            codex_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"],
+            "result"
+        );
+
         // Test kiro export
         let temp_dir2 = TempDir::new().unwrap();
         let output_dir2 = temp_dir2.path();
@@ -655,14 +784,18 @@ mod tests {
         let kiro: Value = serde_json::from_str(&kiro_content).unwrap();
         assert_eq!(kiro["version"], "1.0");
         assert_eq!(kiro["turns"][0]["id"], "test-1");
-        assert_eq!(kiro["turns"][0]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
-        
+        assert_eq!(
+            kiro["turns"][0]["agent_airlift_canonical"]["tool_results"][0]["content"],
+            "result"
+        );
+
         // Test opencode export
         let temp_dir3 = TempDir::new().unwrap();
         let output_dir3 = temp_dir3.path();
         fs::create_dir_all(output_dir3).unwrap();
         export_for_target("opencode", &canonical_turns, output_dir3).unwrap();
-        let opencode_content = fs::read_to_string(output_dir3.join("opencode-like.session.jsonl")).unwrap();
+        let opencode_content =
+            fs::read_to_string(output_dir3.join("opencode-like.session.jsonl")).unwrap();
         let opencode_lines: Vec<Value> = opencode_content
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -670,12 +803,18 @@ mod tests {
         assert_eq!(opencode_lines[0]["resume_compatible"], false);
         assert_eq!(opencode_lines[1]["message_id"], "test-1");
         assert_eq!(opencode_lines[1]["sender"], "user");
-        assert_eq!(opencode_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"], "result");
-        
+        assert_eq!(
+            opencode_lines[1]["agent_airlift_canonical"]["tool_results"][0]["content"],
+            "result"
+        );
+
         // Test invalid target
         let result = export_for_target("invalid", &canonical_turns, output_dir1);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported target"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported target"));
     }
 
     #[test]
@@ -688,34 +827,69 @@ mod tests {
         });
         let summary = health_summary(Some(&health), "claude-code");
         // Signal source (marginlab) and evaluated provider (claude-code) must both appear
-        assert!(summary.contains("marginlab"), "should mention signal source");
-        assert!(summary.contains("claude-code"), "should mention evaluated provider");
+        assert!(
+            summary.contains("marginlab"),
+            "should mention signal source"
+        );
+        assert!(
+            summary.contains("claude-code"),
+            "should mention evaluated provider"
+        );
         assert!(summary.contains("degraded"));
         // Must NOT say "marginlab is degraded" — that conflates source with evaluated provider
-        assert!(!summary.contains("`marginlab` is"), "must not say marginlab is degraded");
+        assert!(
+            !summary.contains("`marginlab` is"),
+            "must not say marginlab is degraded"
+        );
     }
 
     #[test]
     fn test_next_task_suggests_validation_when_last_turn_is_assistant() {
         // Session ends with assistant reply → last user request was addressed
         let turns = vec![
-            CanonicalTurn { id: "t1".into(), role: "user".into(),
-                content: "Add a version flag".into(), timestamp: "".into(), metadata: json!({}), ..Default::default() },
-            CanonicalTurn { id: "t2".into(), role: "assistant".into(),
-                content: "Added version flag.".into(), timestamp: "".into(), metadata: json!({}), ..Default::default() },
+            CanonicalTurn {
+                id: "t1".into(),
+                role: "user".into(),
+                content: "Add a version flag".into(),
+                timestamp: "".into(),
+                metadata: json!({}),
+                ..Default::default()
+            },
+            CanonicalTurn {
+                id: "t2".into(),
+                role: "assistant".into(),
+                content: "Added version flag.".into(),
+                timestamp: "".into(),
+                metadata: json!({}),
+                ..Default::default()
+            },
         ];
         let task = next_task(&turns);
-        assert!(task.contains("Validate"), "should suggest validation, got: {}", task);
-        assert!(task.contains("Add a version flag"), "should reference the completed request");
+        assert!(
+            task.contains("Validate"),
+            "should suggest validation, got: {}",
+            task
+        );
+        assert!(
+            task.contains("Add a version flag"),
+            "should reference the completed request"
+        );
 
         // Session ends with user message → still open, return it directly
-        let turns_open = vec![
-            CanonicalTurn { id: "t1".into(), role: "user".into(),
-                content: "Add a version flag".into(), timestamp: "".into(), metadata: json!({}), ..Default::default() },
-        ];
+        let turns_open = vec![CanonicalTurn {
+            id: "t1".into(),
+            role: "user".into(),
+            content: "Add a version flag".into(),
+            timestamp: "".into(),
+            metadata: json!({}),
+            ..Default::default()
+        }];
         let task_open = next_task(&turns_open);
         assert!(task_open.contains("Add a version flag"));
-        assert!(!task_open.contains("Validate"), "open request should not say Validate");
+        assert!(
+            !task_open.contains("Validate"),
+            "open request should not say Validate"
+        );
     }
 
     #[test]
@@ -728,7 +902,12 @@ mod tests {
                 timestamp: "".into(), ..Default::default() },
         ];
         let targets = vec!["codex".to_string()];
-        let ctx = HandoffContext { source: "claude-code", targets: &targets, repo_snapshot: None, provider_health: None };
+        let ctx = HandoffContext {
+            source: "claude-code",
+            targets: &targets,
+            repo_snapshot: None,
+            provider_health: None,
+        };
         let dir = TempDir::new().unwrap();
         create_handoff_docs(&turns, &ctx, dir.path()).unwrap();
 
@@ -744,7 +923,11 @@ mod tests {
             "## Resume Compatibility",
             "## Evidence / Source Artifacts",
         ] {
-            assert!(h.contains(section), "HANDOFF.md missing actionable section: {}", section);
+            assert!(
+                h.contains(section),
+                "HANDOFF.md missing actionable section: {}",
+                section
+            );
         }
         // It actually extracted the decision, command, and error from the session
         assert!(h.contains("axum::Json"));
@@ -794,15 +977,13 @@ mod tests {
 
     #[test]
     fn test_inline_decision_pattern_still_survives() {
-        let turns = vec![
-            CanonicalTurn {
-                id: "a1".into(),
-                role: "assistant".into(),
-                content: "Done. Decision: base62.".into(),
-                timestamp: "".into(),
-                ..Default::default()
-            },
-        ];
+        let turns = vec![CanonicalTurn {
+            id: "a1".into(),
+            role: "assistant".into(),
+            content: "Done. Decision: base62.".into(),
+            timestamp: "".into(),
+            ..Default::default()
+        }];
         let targets = vec!["codex".to_string()];
         let ctx = HandoffContext {
             source: "claude-code",
@@ -818,16 +999,62 @@ mod tests {
     }
 
     #[test]
+    fn test_structured_decision_records_support_bullets_multiline_and_warnings() {
+        let turns = vec![
+            CanonicalTurn {
+                id: "a1".into(),
+                role: "assistant".into(),
+                content: "- DECISION(auth-skip): ABC workflow step intentionally omitted.\nRATIONALE(auth-skip):\n  Cleared by counsel in writing.\n  PRD 4.2.\nSTATUS(auth-skip): settled - do not revisit.\nDECISION missing delimiter should warn, not vanish.".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
+        ];
+        let targets = vec!["codex".to_string()];
+        let ctx = HandoffContext {
+            source: "claude-code",
+            targets: &targets,
+            repo_snapshot: None,
+            provider_health: None,
+        };
+        let dir = TempDir::new().unwrap();
+        create_handoff_docs(&turns, &ctx, dir.path()).unwrap();
+
+        let handoff = fs::read_to_string(dir.path().join("HANDOFF.md")).unwrap();
+        assert!(handoff.contains("DECISION(auth-skip): ABC workflow step intentionally omitted."));
+        assert!(
+            handoff.contains("RATIONALE(auth-skip):\n  Cleared by counsel in writing.\n  PRD 4.2.")
+        );
+        assert!(handoff.contains("STATUS(auth-skip): settled - do not revisit."));
+        assert!(handoff.contains("WARNING: malformed DECISION record in turn a1"));
+        assert!(handoff.contains("DECISION missing delimiter should warn, not vanish."));
+    }
+
+    #[test]
     fn test_agents_does_not_recommend_repeating_completed_work() {
         // Final user request was answered by a following assistant turn.
         let turns = vec![
-            CanonicalTurn { id: "u1".into(), role: "user".into(),
-                content: "Add a version flag".into(), timestamp: "".into(), ..Default::default() },
-            CanonicalTurn { id: "a1".into(), role: "assistant".into(),
-                content: "Added the version flag and verified the build.".into(), timestamp: "".into(), ..Default::default() },
+            CanonicalTurn {
+                id: "u1".into(),
+                role: "user".into(),
+                content: "Add a version flag".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
+            CanonicalTurn {
+                id: "a1".into(),
+                role: "assistant".into(),
+                content: "Added the version flag and verified the build.".into(),
+                timestamp: "".into(),
+                ..Default::default()
+            },
         ];
         let targets = vec!["kiro".to_string()];
-        let ctx = HandoffContext { source: "claude-code", targets: &targets, repo_snapshot: None, provider_health: None };
+        let ctx = HandoffContext {
+            source: "claude-code",
+            targets: &targets,
+            repo_snapshot: None,
+            provider_health: None,
+        };
         let dir = TempDir::new().unwrap();
         create_handoff_docs(&turns, &ctx, dir.path()).unwrap();
 
@@ -835,11 +1062,15 @@ mod tests {
         // Has an explicit Do Not Repeat section
         assert!(agents.contains("## Do Not Repeat"));
         // Next task is validation-oriented, not a blind repeat of the completed request
-        let next_line = agents.lines()
+        let next_line = agents
+            .lines()
             .skip_while(|l| !l.contains("## Next Recommended Task"))
             .nth(1)
             .unwrap_or("");
-        assert!(next_line.contains("Validate"),
-            "Next task should be validation-oriented, got: {}", next_line);
+        assert!(
+            next_line.contains("Validate"),
+            "Next task should be validation-oriented, got: {}",
+            next_line
+        );
     }
 }

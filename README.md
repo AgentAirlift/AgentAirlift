@@ -55,7 +55,7 @@ recorded in `audit/import-diagnostics.json`.
 
 | Format        | Shape                                                                 |
 |---------------|-----------------------------------------------------------------------|
-| `claude-code` | `{type, message:{role, content: string \| blocks}}`; tool_use / tool_result blocks captured; `progress`/`system`/`file-history-snapshot` skipped |
+| `claude-code` | `{type, message:{role, content: string \| blocks}}`; tool_use / tool_result blocks captured; compact continuation summaries are provenance-marked as `summary`; meta and unknown records are preserved instead of dropped |
 | `codex`       | `session_meta` + `event_msg` (user/agent) + `response_item` (deduped) |
 | `flat`        | `{id, role, content, timestamp, ...}` (unknown fields preserved)      |
 
@@ -114,6 +114,13 @@ both installed plugins with:
 ```
 
 Individual installers are also available: `install-codex` and `install-claude`.
+
+## Decision records (optional)
+
+For higher-fidelity handoffs, add the paste-ready snippet in
+[`examples/decision-records.md`](examples/decision-records.md) to a project's
+`CLAUDE.md` or `AGENTS.md`. Agent Airlift extracts `DECISION`, `RATIONALE`, and
+`STATUS` records into handoff artifacts without AI summarization.
 
 ## Tests
 

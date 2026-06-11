@@ -1,9 +1,9 @@
+use anyhow::Context;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use anyhow::Context;
 
 /// A single imported turn with structured extras preserved where available.
 /// `raw` always retains the original JSON line so no information is lost.
@@ -64,6 +64,7 @@ pub fn import_session(path: &Path) -> anyhow::Result<(Vec<SessionTurn>, ImportDi
     };
     // per-format tallies for confidence scoring
     let (mut claude, mut codex, mut flat, mut unknown) = (0usize, 0usize, 0usize, 0usize);
+    let mut previous_was_compact_boundary = false;
 
     for (i, line) in reader.lines().enumerate() {
         let line_num = i + 1;
@@ -77,14 +78,21 @@ pub fn import_session(path: &Path) -> anyhow::Result<(Vec<SessionTurn>, ImportDi
             Ok(v) => v,
             Err(e) => {
                 diag.malformed_records += 1;
-                diag.warnings.push(format!("Line {}: Invalid JSON - {}", line_num, e));
+                diag.warnings
+                    .push(format!("Line {}: Invalid JSON - {}", line_num, e));
                 continue;
             }
         };
 
         match classify_and_extract(raw, line_num, raw_hash(&line)) {
-            LineOutcome::Turn(turn, kind, preserved_unknown, warning) => {
+            LineOutcome::Turn(mut turn, kind, preserved_unknown, warning) => {
                 tally(kind, &mut claude, &mut codex, &mut flat, &mut unknown);
+                let is_compact_boundary = is_compact_boundary_turn(&turn);
+                if previous_was_compact_boundary && is_compact_continuation_summary(&turn) {
+                    turn.record_type = "compact_summary".to_string();
+                    turn.role = Some("summary".to_string());
+                }
+                previous_was_compact_boundary = false;
                 if is_duplicate_response_item(&turns, &turn) {
                     diag.lines_skipped += 1;
                     diag.intentionally_skipped_records += 1;
@@ -102,9 +110,13 @@ pub fn import_session(path: &Path) -> anyhow::Result<(Vec<SessionTurn>, ImportDi
                 if let Some(w) = warning {
                     diag.warnings.push(w);
                 }
+                if is_compact_boundary {
+                    previous_was_compact_boundary = true;
+                }
             }
             LineOutcome::Skip(kind, warning) => {
                 tally(kind, &mut claude, &mut codex, &mut flat, &mut unknown);
+                previous_was_compact_boundary = false;
                 diag.lines_skipped += 1;
                 diag.intentionally_skipped_records += 1;
                 if let Some(w) = warning {
@@ -132,7 +144,9 @@ pub fn import_session(path: &Path) -> anyhow::Result<(Vec<SessionTurn>, ImportDi
         == diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records;
 
     if turns.is_empty() {
-        return Err(anyhow::anyhow!("Session file is empty or contains no valid JSONL rows"));
+        return Err(anyhow::anyhow!(
+            "Session file is empty or contains no valid JSONL rows"
+        ));
     }
 
     Ok((turns, diag))
@@ -143,7 +157,13 @@ enum LineOutcome {
     Skip(FormatKind, Option<String>),
 }
 
-fn tally(kind: FormatKind, claude: &mut usize, codex: &mut usize, flat: &mut usize, unknown: &mut usize) {
+fn tally(
+    kind: FormatKind,
+    claude: &mut usize,
+    codex: &mut usize,
+    flat: &mut usize,
+    unknown: &mut usize,
+) {
     match kind {
         FormatKind::ClaudeCode => *claude += 1,
         FormatKind::Codex => *codex += 1,
@@ -164,7 +184,15 @@ fn classify_and_extract(raw: Value, line_num: usize, raw_sha256: String) -> Line
                 return LineOutcome::Skip(FormatKind::Codex, None);
             }
             t if CLAUDE_PRESERVE_TYPES.contains(&t) => {
-                return preserve_record(raw, line_num, raw_sha256, t, FormatKind::ClaudeCode, false, None);
+                return preserve_record(
+                    raw,
+                    line_num,
+                    raw_sha256,
+                    t,
+                    FormatKind::ClaudeCode,
+                    false,
+                    None,
+                );
             }
             other => {
                 return preserve_record(
@@ -174,7 +202,10 @@ fn classify_and_extract(raw: Value, line_num: usize, raw_sha256: String) -> Line
                     other,
                     FormatKind::Unknown,
                     true,
-                    Some(format!("Line {}: preserved unrecognized entry type '{}'", line_num, other)),
+                    Some(format!(
+                        "Line {}: preserved unrecognized entry type '{}'",
+                        line_num, other
+                    )),
                 );
             }
         }
@@ -190,7 +221,10 @@ fn classify_and_extract(raw: Value, line_num: usize, raw_sha256: String) -> Line
         "unknown",
         FormatKind::Unknown,
         true,
-        Some(format!("Line {}: preserved row with no recognizable role/content/type", line_num)),
+        Some(format!(
+            "Line {}: preserved row with no recognizable role/content/type",
+            line_num
+        )),
     )
 }
 
@@ -201,11 +235,16 @@ fn extract_flat(raw: Value, source_line: usize, raw_sha256: String) -> LineOutco
         id: raw.get("id").and_then(|v| v.as_str()).map(str::to_string),
         role: raw.get("role").and_then(|v| v.as_str()).map(str::to_string),
         content: content_value.and_then(value_to_text),
-        timestamp: raw.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: raw
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         record_type: "flat".to_string(),
         source_line,
         raw_sha256,
-        content_blocks: content_value.map(content_value_to_blocks).unwrap_or_default(),
+        content_blocks: content_value
+            .map(content_value_to_blocks)
+            .unwrap_or_default(),
         tool_calls: Vec::new(),
         tool_results: Vec::new(),
         raw,
@@ -214,7 +253,12 @@ fn extract_flat(raw: Value, source_line: usize, raw_sha256: String) -> LineOutco
 }
 
 /// Claude Code entries: `message.content` is a string or an array of typed blocks.
-fn extract_claude_message(raw: Value, ty: &str, source_line: usize, raw_sha256: String) -> LineOutcome {
+fn extract_claude_message(
+    raw: Value,
+    ty: &str,
+    source_line: usize,
+    raw_sha256: String,
+) -> LineOutcome {
     let message = raw.get("message").cloned().unwrap_or(Value::Null);
     let role = message
         .get("role")
@@ -262,10 +306,17 @@ fn extract_claude_message(raw: Value, ty: &str, source_line: usize, raw_sha256: 
 
     let content = synthesize_content(&texts, &tool_calls, &tool_results);
     let turn = SessionTurn {
-        id: raw.get("uuid").or_else(|| raw.get("id")).and_then(|v| v.as_str()).map(str::to_string),
+        id: raw
+            .get("uuid")
+            .or_else(|| raw.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         role: Some(role),
         content: Some(content),
-        timestamp: raw.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: raw
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         record_type: ty.to_string(),
         source_line,
         raw_sha256,
@@ -302,14 +353,22 @@ fn extract_codex_event(raw: Value, line_num: usize, raw_sha256: String) -> LineO
     let content_value = payload.get("message").or_else(|| payload.get("content"));
     let content = content_value.and_then(value_to_text).unwrap_or_default();
     let turn = SessionTurn {
-        id: payload.get("id").and_then(|v| v.as_str()).map(str::to_string),
+        id: payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         role: Some(role.to_string()),
         content: Some(content),
-        timestamp: raw.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: raw
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         record_type: "event_msg".to_string(),
         source_line: line_num,
         raw_sha256,
-        content_blocks: content_value.map(content_value_to_blocks).unwrap_or_default(),
+        content_blocks: content_value
+            .map(content_value_to_blocks)
+            .unwrap_or_default(),
         tool_calls: Vec::new(),
         tool_results: Vec::new(),
         raw,
@@ -327,14 +386,22 @@ fn extract_codex_response_item(raw: Value, line_num: usize, raw_sha256: String) 
         .unwrap_or("assistant")
         .to_string();
     let turn = SessionTurn {
-        id: payload.get("id").and_then(|v| v.as_str()).map(str::to_string),
+        id: payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         role: Some(role),
         content: Some(content),
-        timestamp: raw.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: raw
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         record_type: "response_item".to_string(),
         source_line: line_num,
         raw_sha256,
-        content_blocks: content_value.map(content_value_to_blocks).unwrap_or_default(),
+        content_blocks: content_value
+            .map(content_value_to_blocks)
+            .unwrap_or_default(),
         tool_calls: Vec::new(),
         tool_results: Vec::new(),
         raw,
@@ -383,14 +450,23 @@ fn preserved_turn(
     content: String,
 ) -> SessionTurn {
     SessionTurn {
-        id: raw.get("uuid").or_else(|| raw.get("id")).and_then(|v| v.as_str()).map(str::to_string),
+        id: raw
+            .get("uuid")
+            .or_else(|| raw.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         role: Some(role.to_string()),
         content: Some(content),
-        timestamp: raw.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: raw
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         record_type: record_type.to_string(),
         source_line: line_num,
         raw_sha256,
-        content_blocks: vec![json!({"type": "raw_record", "record_type": record_type, "value": raw.clone()})],
+        content_blocks: vec![
+            json!({"type": "raw_record", "record_type": record_type, "value": raw.clone()}),
+        ],
         tool_calls: Vec::new(),
         tool_results: Vec::new(),
         raw,
@@ -406,11 +482,16 @@ fn synthesize_content(texts: &[String], tool_calls: &[Value], tool_results: &[Va
         return tool_results
             .iter()
             .map(|r| {
-                let body = r.get("content").and_then(value_to_text).unwrap_or_else(|| {
-                    r.get("text").and_then(value_to_text).unwrap_or_default()
-                });
+                let body = r
+                    .get("content")
+                    .and_then(value_to_text)
+                    .unwrap_or_else(|| r.get("text").and_then(value_to_text).unwrap_or_default());
                 let err = r.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-                let label = if err { "[tool result: error]" } else { "[tool result]" };
+                let label = if err {
+                    "[tool result: error]"
+                } else {
+                    "[tool result]"
+                };
                 format!("{} {}", label, body)
             })
             .collect::<Vec<_>>()
@@ -438,10 +519,29 @@ fn is_duplicate_response_item(existing: &[SessionTurn], candidate: &SessionTurn)
     })
 }
 
+fn is_compact_boundary_turn(turn: &SessionTurn) -> bool {
+    turn.record_type == "system"
+        && turn.raw.get("subtype").and_then(|v| v.as_str()) == Some("compact_boundary")
+}
+
+fn is_compact_continuation_summary(turn: &SessionTurn) -> bool {
+    if turn.record_type != "user" || turn.role.as_deref() != Some("user") {
+        return false;
+    }
+    let content = turn.content.as_deref().unwrap_or("").to_ascii_lowercase();
+    content.contains("this session is being continued")
+        && content.contains("previous conversation")
+        && (content.contains("summarized below") || content.contains("summary"))
+}
+
 fn raw_hash(line: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(line.as_bytes());
-    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 fn extract_record_text(raw: &Value) -> Option<String> {
@@ -455,16 +555,20 @@ fn extract_record_text(raw: &Value) -> Option<String> {
     raw.get("message")
         .and_then(|m| m.get("content"))
         .and_then(value_to_text)
-        .or_else(|| raw.get("payload").and_then(|p| {
-            p.get("message")
-                .or_else(|| p.get("content"))
-                .and_then(value_to_text)
-        }))
-        .or_else(|| raw.get("data").and_then(|d| {
-            d.get("summary")
-                .or_else(|| d.get("content"))
-                .and_then(value_to_text)
-        }))
+        .or_else(|| {
+            raw.get("payload").and_then(|p| {
+                p.get("message")
+                    .or_else(|| p.get("content"))
+                    .and_then(value_to_text)
+            })
+        })
+        .or_else(|| {
+            raw.get("data").and_then(|d| {
+                d.get("summary")
+                    .or_else(|| d.get("content"))
+                    .and_then(value_to_text)
+            })
+        })
 }
 
 fn value_to_text(value: &Value) -> Option<String> {
@@ -507,13 +611,24 @@ mod tests {
     fn test_import_session_parses_expected_turns() {
         let path = Path::new("examples/sessions/sample-claude-like.jsonl");
         let (turns, diag) = import_session(path).unwrap();
-        assert_eq!(turns.len(), 6, "Should parse exactly 6 turns from sample session");
-        assert!(diag.warnings.is_empty(), "Should have no warnings for valid JSONL");
+        assert_eq!(
+            turns.len(),
+            6,
+            "Should parse exactly 6 turns from sample session"
+        );
+        assert!(
+            diag.warnings.is_empty(),
+            "Should have no warnings for valid JSONL"
+        );
         assert_eq!(diag.detected_format, "flat");
         let first_turn = &turns[0];
         assert_eq!(first_turn.id.as_deref(), Some("turn-1"));
         assert_eq!(first_turn.role.as_deref(), Some("user"));
-        assert!(first_turn.content.as_deref().unwrap().contains("Create a simple Rust CLI"));
+        assert!(first_turn
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("Create a simple Rust CLI"));
     }
 
     #[test]
@@ -524,12 +639,19 @@ mod tests {
 
         let (turns, diag) = import_session(&invalid_jsonl_path).unwrap();
         assert_eq!(turns.len(), 2, "Should parse 2 valid turns");
-        assert_eq!(diag.warnings.len(), 1, "Should have 1 warning for invalid line");
+        assert_eq!(
+            diag.warnings.len(),
+            1,
+            "Should have 1 warning for invalid line"
+        );
         assert!(diag.warnings[0].contains("Invalid JSON"));
         assert_eq!(turns[0].id.as_deref(), Some("valid-1"));
         assert_eq!(turns[1].id.as_deref(), Some("valid-2"));
         assert!(diag.accounting_balanced);
-        assert_eq!(diag.lines_read, diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records);
+        assert_eq!(
+            diag.lines_read,
+            diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records
+        );
     }
 
     #[test]
@@ -547,9 +669,16 @@ mod tests {
         let path = Path::new("examples/sessions/claude-code-realistic.jsonl");
         let (turns, diag) = import_session(path).unwrap();
         assert_eq!(diag.detected_format, "claude-code");
-        assert!(diag.format_confidence > 0.9, "confidence should be high, got {}", diag.format_confidence);
+        assert!(
+            diag.format_confidence > 0.9,
+            "confidence should be high, got {}",
+            diag.format_confidence
+        );
         assert!(diag.accounting_balanced);
-        assert_eq!(diag.lines_read, diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records);
+        assert_eq!(
+            diag.lines_read,
+            diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records
+        );
         assert!(turns.len() >= 9, "got {} turns", turns.len());
 
         // The first assistant turn used a Read tool
@@ -558,7 +687,9 @@ mod tests {
 
         // There is an error tool_result somewhere
         let has_error_result = turns.iter().any(|t| {
-            t.tool_results.iter().any(|r| r["is_error"].as_bool() == Some(true))
+            t.tool_results
+                .iter()
+                .any(|r| r["is_error"].as_bool() == Some(true))
         });
         assert!(has_error_result, "should capture an is_error tool_result");
     }
@@ -590,7 +721,11 @@ mod tests {
         assert_eq!(turns[0].record_type, "event_msg");
         assert_eq!(turns[0].role.as_deref(), Some("metadata"));
         assert_eq!(turns[0].raw["payload"]["details"]["exit_code"], 1);
-        assert!(turns[0].content.as_deref().unwrap().contains("tool output must survive"));
+        assert!(turns[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("tool output must survive"));
         assert_eq!(diag.lines_skipped, 0);
         assert_eq!(diag.preserved_unknown_records, 1);
         assert!(diag.warnings.iter().any(|w| w.contains("tool_output")));
@@ -605,9 +740,17 @@ mod tests {
         assert_eq!(turns[0].raw["unmapped_top"], "keep-me");
         assert_eq!(turns[0].raw["custom_meta"]["client"], "cli");
         // 2 invalid-json lines + 1 unknown-type telemetry warning = 3 warnings
-        assert!(diag.warnings.iter().filter(|w| w.contains("Invalid JSON")).count() == 2);
+        assert!(
+            diag.warnings
+                .iter()
+                .filter(|w| w.contains("Invalid JSON"))
+                .count()
+                == 2
+        );
         assert!(diag.warnings.iter().any(|w| w.contains("telemetry")));
-        assert!(turns.iter().any(|t| t.record_type == "telemetry" && t.raw["payload"]["event"] == "heartbeat"));
+        assert!(turns
+            .iter()
+            .any(|t| t.record_type == "telemetry" && t.raw["payload"]["event"] == "heartbeat"));
         assert!(diag.accounting_balanced);
     }
 
@@ -631,6 +774,36 @@ mod tests {
     }
 
     #[test]
+    fn test_real_claude_compact_boundary_marks_next_continuation_as_summary() {
+        let path = Path::new("examples/sessions/claude-compact-boundary-realistic.jsonl");
+        let (turns, diag) = import_session(path).unwrap();
+
+        assert!(diag.accounting_balanced);
+        assert!(turns.iter().any(|t| {
+            t.record_type == "system"
+                && t.role.as_deref() == Some("system")
+                && t.raw["subtype"] == "compact_boundary"
+                && t.content
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("Compact boundary")
+        }));
+
+        let summary = turns
+            .iter()
+            .find(|t| t.id.as_deref() == Some("u-real-compact-summary"))
+            .expect("compact continuation summary turn");
+        assert_eq!(summary.record_type, "compact_summary");
+        assert_eq!(summary.role.as_deref(), Some("summary"));
+        assert!(summary
+            .content
+            .as_deref()
+            .unwrap_or("")
+            .contains("DECISION(api-v2): Keep API v2"));
+        assert_eq!(summary.raw["message"]["role"], "user");
+    }
+
+    #[test]
     fn test_structured_flat_content_survives_as_blocks() {
         let temp_dir = TempDir::new().unwrap();
         let session_path = temp_dir.path().join("structured.jsonl");
@@ -641,7 +814,11 @@ mod tests {
 
         let (turns, _) = import_session(&session_path).unwrap();
         assert_eq!(turns.len(), 1);
-        assert!(turns[0].content.as_deref().unwrap().contains("DECISION: keep v2"));
+        assert!(turns[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("DECISION: keep v2"));
         assert_eq!(turns[0].content_blocks.len(), 2);
         assert_eq!(turns[0].content_blocks[1]["type"], "image");
     }
@@ -657,7 +834,11 @@ mod tests {
 
         let (turns, _) = import_session(&session_path).unwrap();
         assert_eq!(turns.len(), 1);
-        assert!(turns[0].content.as_deref().unwrap().contains("custom object text"));
+        assert!(turns[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("custom object text"));
         assert_eq!(turns[0].content_blocks[0]["type"], "raw_content");
         assert_eq!(turns[0].content_blocks[0]["value"]["extra"]["keep"], true);
     }
@@ -684,12 +865,53 @@ mod tests {
         fs::write(
             &session_path,
             r#"{"type":"future_event","payload":{"note":"preserve me"}}"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let (turns, diag) = import_session(&session_path).unwrap();
         assert_eq!(turns.len(), 1);
         assert!(diag.warnings.iter().any(|w| w.contains("future_event")));
         assert!(turns[0].raw.get("airlift_warning").is_none());
         assert_eq!(turns[0].raw["payload"]["note"], "preserve me");
+    }
+
+    #[test]
+    fn test_adversarial_jsonl_corpus_is_fully_accounted() {
+        let temp_dir = TempDir::new().unwrap();
+        let session_path = temp_dir.path().join("adversarial.jsonl");
+        fs::write(
+            &session_path,
+            concat!(
+                "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"},{\"type\":\"unknown_block\",\"payload\":{\"keep\":true}}]}}\n",
+                "{\"type\":\"future_event\",\"payload\":{\"nested\":{\"keep\":[1,true,{\"x\":\"y\"}]}}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"tool_output\",\"message\":\"tool output survives\",\"details\":{\"exit_code\":2}}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/tmp/project\"}}\n",
+                "{\"role\":\"assistant\",\"content\":{\"text\":\"object content survives\",\"extra\":{\"keep\":true}}}\n",
+                "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"uuid\":\"boundary\",\"content\":\"Compact boundary reached\"}\n",
+                "{\"type\":\"user\",\"uuid\":\"summary\",\"message\":{\"role\":\"user\",\"content\":\"This session is being continued from a previous conversation that ran out of context. The previous conversation is summarized below:\\nSummary:\\nDECISION: keep data.\"}}\n",
+                "{\"type\":\"broken\",\n"
+            ),
+        )
+        .unwrap();
+
+        let (turns, diag) = import_session(&session_path).unwrap();
+
+        assert_eq!(diag.lines_read, 8);
+        assert_eq!(
+            diag.lines_read,
+            diag.mapped_records + diag.intentionally_skipped_records + diag.malformed_records
+        );
+        assert!(diag.accounting_balanced);
+        assert_eq!(diag.malformed_records, 1);
+        assert_eq!(diag.intentionally_skipped_records, 1);
+        assert!(diag.warnings.iter().any(|w| w.contains("Invalid JSON")));
+        assert!(diag.warnings.iter().any(|w| w.contains("future_event")));
+        assert!(diag.warnings.iter().any(|w| w.contains("tool_output")));
+        assert!(turns.iter().any(|t| t.record_type == "compact_summary"));
+        assert!(turns.iter().any(|t| t
+            .content
+            .as_deref()
+            .unwrap_or("")
+            .contains("object content survives")));
     }
 }
