@@ -1,18 +1,79 @@
 # Agent Airlift
 
-A local, deterministic CLI that performs a **manual transfer** of an AI coding
-session from one agent to another (e.g. Claude Code → Codex / Kiro / OpenCode).
-It imports a session, normalizes it to a canonical schema, and emits handoff
-docs plus readable, target-shaped exports. Optional direct Marginlab
-provider-health signal ingestion is supported but never required.
+[![Rust](https://github.com/AgentAirlift/AgentAirlift/actions/workflows/rust.yml/badge.svg)](https://github.com/AgentAirlift/AgentAirlift/actions/workflows/rust.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
+[![GitHub stars](https://img.shields.io/github/stars/AgentAirlift/AgentAirlift?style=social)](https://github.com/AgentAirlift/AgentAirlift/stargazers)
 
-> Scope note: The core CLI is deterministic and calls **no AI APIs** during
-> generation. Transfers are always **explicit**. Optional Claude Code / Codex
-> plugins (see [`plugins/`](plugins/)) add **on-demand** provider-health checks
-> and recommend a transfer when a provider looks degraded — but they only ever
-> invoke the same explicit migration workflow described here.
+Provider degraded? Airlift your AI coding session to another agent without
+losing the working context.
 
-## Quick start
+Agent Airlift is a local, deterministic CLI for moving an AI coding session from
+one harness to another, for example Claude Code to Codex, Kiro, or OpenCode. It
+imports the source JSONL, normalizes it into a canonical loss-accounted schema,
+and emits handoff docs plus target-shaped exports.
+
+No AI APIs are called during conversion. Nothing is uploaded. Transfers are
+explicit.
+
+```mermaid
+flowchart LR
+    health["Provider health signal<br/>Marginlab / file / none"]
+    source["Source session JSONL<br/>Claude Code / Codex / flat"]
+    project["Project files"]
+    importer["Tolerant importer<br/>warnings instead of panics"]
+    canonical["Canonical session<br/>deterministic + loss-accounted"]
+    exports["Handoff bundle<br/>HANDOFF.md / AGENTS.md / target exports"]
+    audit["Audit gate<br/>accounting + hashes + sidecars"]
+    target["Continue in<br/>Codex / Claude Code / Kiro / OpenCode"]
+
+    health --> canonical
+    source --> importer --> canonical
+    project --> canonical
+    canonical --> exports --> target
+    canonical --> audit
+```
+
+## Install
+
+From a checkout:
+
+```bash
+cargo install --path .
+agent-airlift --help
+```
+
+For local Codex and Claude Code slash-command integration:
+
+```bash
+./scripts/agent-airlift install-all
+```
+
+Codex-only and Claude-only installers are also available:
+
+```bash
+./scripts/agent-airlift install-codex
+./scripts/agent-airlift install-claude
+```
+
+The installers build the release binary, replace older local plugin files, and
+back up overwritten Codex prompts/skills as `.bak`, `.bak.1`, and so on.
+
+## Quick Start
+
+Run a full migration using checked-in fixtures:
+
+```bash
+agent-airlift demo \
+  --session examples/sessions/claude-code-realistic.jsonl \
+  --project examples/projects/tiny-rust-cli \
+  --out ./airlift-out \
+  --source claude-code \
+  --targets codex,kiro,opencode \
+  --provider-health file \
+  --provider-health-file examples/provider-health/degraded.marginlab.cached.json
+```
+
+Or, without installing first:
 
 ```bash
 cargo run -- demo \
@@ -21,109 +82,182 @@ cargo run -- demo \
   --out ./airlift-out \
   --source claude-code \
   --targets codex,kiro,opencode \
-  --provider-health none
+  --provider-health file \
+  --provider-health-file examples/provider-health/degraded.marginlab.cached.json
 ```
 
 Output is written under `airlift-out/`:
 
-```
-raw/         source session copy, repo snapshot, provider-health, marginlab-response
-normalized/  canonical-session.json (deterministic schema)
-replay/      agent-airlift.session.jsonl
-exports/     HANDOFF.md, AGENTS.md, codex/kiro/opencode exports, .kiro specs
-audit/       conversion-report.md, warnings.json, dropped-fields.json,
-             import-diagnostics.json
+```text
+raw/          source session copy, repo snapshot, provider health
+normalized/   canonical-session.json
+replay/       agent-airlift.session.jsonl
+exports/      HANDOFF.md, AGENTS.md, target-shaped exports
+audit/        conversion-report.md, warnings.json, dropped-fields.json,
+              import-diagnostics.json, ci-gate.json
 ```
 
-`demo` is an alias of `migrate` (the full pipeline). A lightweight `health`
-subcommand runs only the provider-health step and persists
-`<out>/provider-health.json` — useful for the plugins below:
+The generated `HANDOFF.md` starts with the reason for transfer, current
+objective, current state, important files, decisions, risks, and a resume prompt.
+The generated `audit/ci-gate.json` must pass before the migration is considered
+safe to hand off.
+
+## Money-Shot Demo
+
+Use the demo script when recording a terminal GIF or proving the workflow to a
+new user:
 
 ```bash
-cargo run -- health --source claude-code \
-  --provider-health marginlab \
-  --provider-health-cache-file examples/provider-health/degraded.marginlab.cached.json
-# prints the normalized signal + a line:
-# AIRLIFT_HEALTH status=degraded provider=claude-code confidence=0.74 source=cached-marginlab
+bash demos/money-shot.sh ./airlift-demo-out
 ```
 
-## Supported import formats
+It shows the core launch story in one flow:
 
-The importer tolerates JSONL variations and never panics on malformed lines —
-bad rows become structured warnings. Detected format and a confidence score are
-recorded in `audit/import-diagnostics.json`.
+1. Read a degraded Claude Code provider-health signal.
+2. Airlift a realistic Claude Code session into Codex, Kiro, and OpenCode.
+3. Print the generated `HANDOFF.md` proof that context survived.
+4. Print the CI gate proving accounting, hashes, and exports passed.
 
-| Format        | Shape                                                                 |
-|---------------|-----------------------------------------------------------------------|
-| `claude-code` | `{type, message:{role, content: string \| blocks}}`; tool_use / tool_result blocks captured; compact continuation summaries are provenance-marked as `summary`; meta and unknown records are preserved instead of dropped |
-| `codex`       | `session_meta` + `event_msg` (user/agent) + `response_item` (deduped) |
-| `flat`        | `{id, role, content, timestamp, ...}` (unknown fields preserved)      |
-
-Realistic example fixtures live in `examples/sessions/`:
-`claude-code-realistic.jsonl`, `codex-realistic.jsonl`, `edge-cases.jsonl`.
-
-## Canonical schema
-
-Each canonical turn carries stable `id`, `role`, `content`, `timestamp`,
-`source` (provenance), `content_blocks`, `tool_calls`, `tool_results`, and
-`metadata` (preserved unknown fields). The schema is deterministic. It captures
-only observable conversation data — it does **not** reconstruct model hidden
-state or chain-of-thought.
-
-## Resume compatibility
-
-Target exports under `exports/` are readable, deterministic representations of
-the session, **not** native session files. Native `resume` compatibility is not
-guaranteed; use the exports plus `HANDOFF.md` / `AGENTS.md` to seed a fresh
-session in the target tool.
-
-## Provider health (optional)
+If you use [VHS](https://github.com/charmbracelet/vhs), the starter tape is:
 
 ```bash
-# file mode (no network, no token)
---provider-health file --provider-health-file examples/provider-health/degraded.marginlab.cached.json
-
-# marginlab mode: fetches the live tracker directly; falls back to cache if fetch fails
-# "Collecting baseline data" is treated as unknown because degradation detection is paused
---provider-health marginlab \
-  --provider-health-cache-file examples/provider-health/degraded.marginlab.cached.json
+vhs demos/money-shot.tape
 ```
 
-Generated docs distinguish the signal source from the evaluated provider, e.g.
-*"Provider health signal from `cached-marginlab`: `claude-code` is degraded."*
+## Plugin Commands
 
-## Plugins (optional)
+The optional plugins add two commands to Codex and Claude Code:
 
-On-demand Claude Code and Codex plugins live under [`plugins/`](plugins/) and add
-two slash commands each:
-
-- `/airlift-check` — refresh the provider-health signal; if the active provider
-  looks **degraded**, recommend airlifting to the other harness.
-- `/airlift-migrate` — run the (unchanged) migration pipeline on the current
-  session and emit a handoff bundle for the other harness.
+- `/airlift-check` refreshes provider health and recommends an airlift only when
+  the active provider looks degraded.
+- `/airlift-migrate` runs the same deterministic migration pipeline and prints
+  the handoff bundle path plus a resume prompt.
 
 Pairing is cross-tool: the Claude plugin checks `claude-code` and airlifts to
-`codex`; the Codex plugin checks `codex` and airlifts to `claude-code`. The
-plugins are thin front-ends that shell out to `agent-airlift health` / `migrate`
-— no new conversion logic. See [`plugins/SPEC.md`](plugins/SPEC.md) and each
-plugin's README for install and configuration. For local development, refresh
-both installed plugins with:
+`codex`; the Codex plugin checks `codex` and airlifts to `claude-code`.
 
-```bash
-./scripts/agent-airlift install-all
-```
+## What Gets Preserved
 
-Individual installers are also available: `install-codex` and `install-claude`.
-
-## Decision records (optional)
+| Data | Behavior |
+|------|----------|
+| User and assistant turns | Converted into canonical turns with stable hashes |
+| Tool calls and tool results | Captured as structured blocks where present |
+| Unknown source fields | Preserved in metadata instead of silently dropped |
+| Malformed JSONL rows | Recorded as structured warnings; importer does not panic |
+| Claude compact summaries | Provenance-marked as summaries instead of lost |
+| Decision records | `DECISION`, `RATIONALE`, and `STATUS` records are lifted into handoff docs |
+| Provider health | Stored with source, status, confidence, and reason |
+| Repo context | Snapshot of relevant project files, excluding sensitive/heavy paths |
 
 For higher-fidelity handoffs, add the paste-ready snippet in
 [`examples/decision-records.md`](examples/decision-records.md) to a project's
-`CLAUDE.md` or `AGENTS.md`. Agent Airlift extracts `DECISION`, `RATIONALE`, and
-`STATUS` records into handoff artifacts without AI summarization.
+`CLAUDE.md` or `AGENTS.md`.
 
-## Tests
+## Supported Import Formats
+
+The importer tolerates JSONL variations and never panics on malformed lines.
+Detected format and confidence are recorded in `audit/import-diagnostics.json`.
+
+| Format | Shape |
+|--------|-------|
+| `claude-code` | `{type, message:{role, content: string | blocks}}`; tool_use / tool_result blocks captured; compact continuation summaries are provenance-marked as `summary`; meta and unknown records are preserved instead of dropped |
+| `codex` | `session_meta` + `event_msg` user/agent rows + deduped `response_item` rows |
+| `flat` | `{id, role, content, timestamp, ...}` with unknown fields preserved |
+
+Realistic fixtures live in `examples/sessions/`.
+
+## Provider Health
+
+Provider health is optional. It can come from a local file, live Marginlab fetch,
+or be disabled:
+
+```bash
+agent-airlift health \
+  --source claude-code \
+  --provider-health marginlab \
+  --provider-health-cache-file examples/provider-health/degraded.marginlab.cached.json
+```
+
+The health command persists `<out>/provider-health.json` and prints a
+machine-readable status line:
+
+```text
+AIRLIFT_HEALTH status=degraded provider=claude-code confidence=0.74 source=cached-marginlab
+```
+
+Generated docs distinguish the signal source from the evaluated provider, for
+example: `Provider health signal from cached-marginlab: claude-code is degraded.`
+
+## Resume Compatibility
+
+Target exports under `exports/` are readable, deterministic representations of
+the session, not guaranteed native session files. Use `HANDOFF.md`, `AGENTS.md`,
+and the target-shaped exports to seed a fresh session in the destination tool.
+
+For Codex and Claude Code, `--native-install` can install native-shaped session
+files, but this is explicitly opt-in:
+
+```bash
+agent-airlift demo \
+  --session examples/sessions/claude-code-realistic.jsonl \
+  --project examples/projects/tiny-rust-cli \
+  --out ./airlift-out \
+  --source claude-code \
+  --targets codex \
+  --provider-health none \
+  --native-install
+```
+
+## FAQ
+
+### Does Agent Airlift call AI APIs?
+
+No. The migration pipeline is deterministic and local. It converts observable
+session data and project context; it does not summarize with an LLM.
+
+### Does it upload to Box, Apify, or another external service?
+
+No. Box upload and Apify scraping were removed. Live provider health can fetch
+Marginlab directly when requested, but migration artifacts stay local.
+
+### Is this native resume?
+
+Not by default. The main output is a deterministic handoff bundle. Native-shaped
+Codex and Claude Code session files are available with `--native-install`, but
+the portable contract is the handoff bundle.
+
+### What gets dropped?
+
+Dropped or unmapped fields are listed in `audit/dropped-fields.json`. The CI gate
+fails if accounting is unbalanced or if exports do not match the canonical
+sidecars.
+
+### Why not copy-paste the last prompt?
+
+Copy-paste loses provenance, tool calls, file context, decisions, warnings, and
+loss accounting. Agent Airlift creates an auditable bundle that the next agent
+can inspect before continuing.
+
+### What if provider health is unavailable?
+
+Use `--provider-health none` for explicit manual transfers, or provide a cache
+file. Health failures do not require any upload or external dependency.
+
+## Launch Prep
+
+The launch checklist and draft copy live in [`LAUNCH.md`](LAUNCH.md). Do not
+drive traffic until the README, demo recording, install path, and FAQ are all
+current.
+
+## Development
 
 ```bash
 cargo test
+```
+
+Useful local checks:
+
+```bash
+git diff --check
+rustfmt --check src/*.rs tests/*.rs
 ```
