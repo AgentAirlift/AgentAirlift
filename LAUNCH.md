@@ -5,13 +5,19 @@ Do not spread the first push across multiple weeks; the goal is star velocity.
 
 ## Before Launch
 
-- README above the fold states the pain, proof, install path, and demo command.
-- `bash demos/money-shot.sh ./airlift-demo-out` passes from a clean checkout.
-- A terminal GIF generated from `demos/money-shot.tape` is embedded or linked.
+- README above the fold states the pain, proof, install path, and generated demo asset.
+- `assets/agent-airlift-architecture.svg` is embedded in the README.
+- `assets/agent-airlift-demo.gif` is embedded in the README and renders on GitHub.
 - GitHub description and topics are current.
 - `cargo test` and CI are green on `main`.
 - FAQ covers AI APIs, uploads, native resume, dropped data, and provider-health fallback.
 - Prepare a private first-100 list of users who already care about Codex, Claude Code, OpenCode, Kiro, Rust CLIs, or agent tooling.
+
+## Asset Policy
+
+Keep local generation helpers under `demos/`, but do not commit those scripts or
+tapes. The public repository should contain the final launch assets under
+`assets/`, not the local recording machinery.
 
 ## One-Line Pitch
 
@@ -39,7 +45,7 @@ The tool is deliberately local and boring: it imports a source session JSONL, no
 
 The thing I wanted was not magic native resume. I wanted a reliable, inspectable handoff bundle that lets me move from Claude Code to Codex, Kiro, or OpenCode when a provider is degraded or when I want a second agent to continue the work.
 
-The repo includes fixtures, a money-shot demo script, and CI gates that assert loss accounting and export sidecars match the canonical session.
+The repo includes fixtures, generated launch assets, and CI gates that assert loss accounting and export sidecars match the canonical session.
 
 Feedback I am especially looking for: which session formats should be supported next, and what evidence would make you trust a migrated agent handoff?
 ```
@@ -73,7 +79,7 @@ Provider degraded in the middle of an AI coding session?
 
 I built Agent Airlift: a local Rust CLI that moves a session from Claude Code or Codex into another agent without losing the working context.
 
-[demo GIF]
+[assets/agent-airlift-demo.gif]
 
 What it preserves:
 - current objective
@@ -101,7 +107,7 @@ Repo: <link>
 ## Do Not Launch If
 
 - The first screen of the README still needs explanation from you.
-- The demo script fails on a clean checkout.
+- The README GIF or architecture diagram is missing or stale.
 - The install path is ambiguous.
 - GitHub Actions is red.
 - You cannot spend several hours responding.

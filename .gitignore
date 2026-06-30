@@ -35,3 +35,11 @@ target
 .DS_Store
 hardening-spec.md
 airlift-out-codex-to-claude/
+
+# Local launch-asset generation helpers. Generated public assets belong in /assets/.
+/demos/*.sh
+/demos/*.tape
+/demos/*.cast
+/demos/*.mp4
+/demos/*.mov
+/demos/*.log

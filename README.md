@@ -15,23 +15,13 @@ and emits handoff docs plus target-shaped exports.
 No AI APIs are called during conversion. Nothing is uploaded. Transfers are
 explicit.
 
-```mermaid
-flowchart LR
-    health["Provider health signal<br/>Marginlab / file / none"]
-    source["Source session JSONL<br/>Claude Code / Codex / flat"]
-    project["Project files"]
-    importer["Tolerant importer<br/>warnings instead of panics"]
-    canonical["Canonical session<br/>deterministic + loss-accounted"]
-    exports["Handoff bundle<br/>HANDOFF.md / AGENTS.md / target exports"]
-    audit["Audit gate<br/>accounting + hashes + sidecars"]
-    target["Continue in<br/>Codex / Claude Code / Kiro / OpenCode"]
+<p align="center">
+  <img src="assets/agent-airlift-architecture.svg" alt="Agent Airlift architecture: source sessions and provider health become a canonical session, handoff bundle, target exports, and audit gate" width="100%">
+</p>
 
-    health --> canonical
-    source --> importer --> canonical
-    project --> canonical
-    canonical --> exports --> target
-    canonical --> audit
-```
+<p align="center">
+  <img src="assets/agent-airlift-demo.gif" alt="Terminal demo showing a degraded provider-health signal, deterministic session migration, generated handoff, and passing audit gate" width="920">
+</p>
 
 ## Install
 
@@ -102,27 +92,14 @@ objective, current state, important files, decisions, risks, and a resume prompt
 The generated `audit/ci-gate.json` must pass before the migration is considered
 safe to hand off.
 
-## Money-Shot Demo
+## Demo Asset
 
-Use the demo script when recording a terminal GIF or proving the workflow to a
-new user:
-
-```bash
-bash demos/money-shot.sh ./airlift-demo-out
-```
-
-It shows the core launch story in one flow:
+The terminal GIF above shows the core launch story in one flow:
 
 1. Read a degraded Claude Code provider-health signal.
 2. Airlift a realistic Claude Code session into Codex, Kiro, and OpenCode.
 3. Print the generated `HANDOFF.md` proof that context survived.
 4. Print the CI gate proving accounting, hashes, and exports passed.
-
-If you use [VHS](https://github.com/charmbracelet/vhs), the starter tape is:
-
-```bash
-vhs demos/money-shot.tape
-```
 
 ## Plugin Commands
 

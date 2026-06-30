@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Airlift architecture</title>
+  <desc id="desc">Provider health and source session data flow into a deterministic canonical session, then into handoff artifacts, target exports, and an audit gate.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#08111f"/>
+      <stop offset="52%" stop-color="#0f2433"/>
+      <stop offset="100%" stop-color="#152018"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#172337"/>
+      <stop offset="100%" stop-color="#101826"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d7ffe2"/>
+      <stop offset="100%" stop-color="#8ef0b1"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9fd8ff"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="720" rx="34" fill="url(#bg)"/>
+  <circle cx="1120" cy="72" r="190" fill="#7effb2" opacity="0.08"/>
+  <circle cx="150" cy="665" r="230" fill="#66b7ff" opacity="0.09"/>
+  <path d="M80 600 C290 500 358 672 536 552 C714 430 828 486 1020 384 C1120 332 1196 346 1260 372" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+
+  <text x="70" y="82" fill="#eff8ff" font-size="42" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="800">Airlift the session, not the vibes</text>
+  <text x="72" y="124" fill="#bad0df" font-size="19" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif">Local conversion from degraded provider context to auditable target-agent handoff.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="185" width="250" height="120" rx="24" fill="url(#panel)" stroke="#34506c"/>
+    <text x="96" y="228" fill="#ffffff" font-size="24" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="700">Source session</text>
+    <text x="96" y="260" fill="#b8c6d4" font-size="16" font-family="Menlo, SFMono-Regular, monospace">Claude Code / Codex</text>
+    <text x="96" y="286" fill="#7fb7ff" font-size="15" font-family="Menlo, SFMono-Regular, monospace">JSONL + tool blocks</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="390" width="250" height="120" rx="24" fill="url(#panel)" stroke="#34506c"/>
+    <text x="96" y="433" fill="#ffffff" font-size="24" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="700">Health signal</text>
+    <text x="96" y="465" fill="#b8c6d4" font-size="16" font-family="Menlo, SFMono-Regular, monospace">Marginlab / file / none</text>
+    <text x="96" y="491" fill="#ffca7a" font-size="15" font-family="Menlo, SFMono-Regular, monospace">degraded -> migrate</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="430" y="245" width="310" height="205" rx="30" fill="url(#core)" stroke="#e6fff0" stroke-opacity="0.8"/>
+    <text x="472" y="303" fill="#102418" font-size="30" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="900">Canonical core</text>
+    <text x="472" y="342" fill="#183d29" font-size="17" font-family="Menlo, SFMono-Regular, monospace">deterministic schema</text>
+    <text x="472" y="372" fill="#183d29" font-size="17" font-family="Menlo, SFMono-Regular, monospace">stable hashes</text>
+    <text x="472" y="402" fill="#183d29" font-size="17" font-family="Menlo, SFMono-Regular, monospace">loss accounting</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="870" y="160" width="300" height="118" rx="24" fill="url(#panel)" stroke="#34506c"/>
+    <text x="898" y="204" fill="#ffffff" font-size="24" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="700">Handoff bundle</text>
+    <text x="898" y="236" fill="#b8c6d4" font-size="16" font-family="Menlo, SFMono-Regular, monospace">HANDOFF.md + AGENTS.md</text>
+    <text x="898" y="260" fill="#7effb2" font-size="15" font-family="Menlo, SFMono-Regular, monospace">objective, files, risks</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="870" y="322" width="300" height="118" rx="24" fill="url(#panel)" stroke="#34506c"/>
+    <text x="898" y="366" fill="#ffffff" font-size="24" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="700">Target exports</text>
+    <text x="898" y="398" fill="#b8c6d4" font-size="16" font-family="Menlo, SFMono-Regular, monospace">Codex / Kiro / OpenCode</text>
+    <text x="898" y="422" fill="#7fb7ff" font-size="15" font-family="Menlo, SFMono-Regular, monospace">readable session seeds</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="870" y="484" width="300" height="118" rx="24" fill="url(#panel)" stroke="#34506c"/>
+    <text x="898" y="528" fill="#ffffff" font-size="24" font-family="Avenir Next, ui-sans-serif, system-ui, sans-serif" font-weight="700">Audit gate</text>
+    <text x="898" y="560" fill="#b8c6d4" font-size="16" font-family="Menlo, SFMono-Regular, monospace">mapped + skipped + warned</text>
+    <text x="898" y="584" fill="#7effb2" font-size="15" font-family="Menlo, SFMono-Regular, monospace">exports match canonical</text>
+  </g>
+
+  <path d="M320 245 C370 245 382 310 430 318" fill="none" stroke="#9fd8ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M320 450 C370 450 382 390 430 378" fill="none" stroke="#9fd8ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M740 330 C795 300 815 220 870 220" fill="none" stroke="#9fd8ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M740 348 C800 352 815 382 870 382" fill="none" stroke="#9fd8ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M740 395 C800 450 815 542 870 542" fill="none" stroke="#9fd8ff" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <rect x="430" y="540" width="310" height="64" rx="18" fill="#07121d" stroke="#35546f"/>
+  <text x="462" y="580" fill="#d7ffe2" font-size="17" font-family="Menlo, SFMono-Regular, monospace">No AI APIs. No uploads. Explicit transfers.</text>
+</svg>
